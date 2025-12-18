@@ -6,6 +6,7 @@ Simulates the three-agent workflow: Generator → Reflector → Curator.
 
 import json
 from typing import List, Dict
+import sqlite3
 
 # ----------------------------
 # Agentic Roles
@@ -44,6 +45,60 @@ class Curator:
         return playbook
 
 # ----------------------------
+# Database Helpers
+# ----------------------------
+
+def get_db_connection():
+    return sqlite3.connect("../sql_course/agent.db")
+
+
+def get_ground_truth(metric: str, year: int = 2023) -> str:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT value FROM financial_facts WHERE metric = ? AND year = ?",
+        (metric, year)
+    )
+    row = cur.fetchone()
+    conn.close()
+    return str(row[0]) if row else None
+
+
+def store_prediction(question, prediction):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO agent_predictions (question, predicted_answer) VALUES (?, ?)",
+        (question, prediction)
+    )
+    prediction_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return prediction_id
+
+
+def store_feedback(prediction_id, correct_answer, is_correct):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO agent_feedback VALUES (?, ?, ?)",
+        (prediction_id, correct_answer, is_correct)
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_playbook(rule):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO agent_playbook (rule) VALUES (?)",
+        (rule,)
+    )
+    conn.commit()
+    conn.close()
+
+# ----------------------------
 # ACE Simulation
 # ----------------------------
 
@@ -53,10 +108,14 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
     curator = Curator()
 
     playbook = initial_playbook.copy()
-    results = []
 
     for sample in samples:
-        question, gt = sample["question"], sample["answer"]
+        question = sample["question"] 
+        gt = get_ground_truth(sample["metric"])
+
+
+        if gt is None:
+            raise ValueError(f"No ground truth found for metric: {sample['metric']}")
 
         # Step 1: Generate
         prediction = generator.generate(question)
@@ -66,18 +125,13 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
         # Step 3: Curate (update playbook)
         playbook = curator.curate(playbook, reflection)
+        generator.playbook = playbook
 
-        results.append({
-            "question": question,
-            "prediction": prediction["final_answer"],
-            "ground_truth": gt,
-            "correct": reflection["correct"]
-        })
+        prediction_id = store_prediction(question, prediction["final_answer"])
+        store_feedback(prediction_id, gt, int(reflection["correct"]))
 
-    print(json.dumps({
-        "final_playbook": playbook,
-        "results": results
-    }, indent=2))
+        if not reflection["correct"]:
+            update_playbook(reflection["key_insight"])
 
 
 # ----------------------------
@@ -86,8 +140,8 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
 if __name__ == "__main__":
     mock_samples = [
-        {"question": "What is total revenue for 2023?", "answer": "42"},
-        {"question": "What is net income for 2023?", "answer": "55"}
+        {"question": "What is total revenue for 2023?", "metric": "revenue"},
+        {"question": "What is net income for 2023?", "metric": "net_income"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
@@ -136,5 +190,5 @@ def simulate_finer_adaptation(rounds=10):
     plt.grid(True)
     plt.show()
 
-if __name__ == "__main__":
-    simulate_finer_adaptation(rounds=12)
+#if __name__ == "__main__":
+#    simulate_finer_adaptation(rounds=12)
