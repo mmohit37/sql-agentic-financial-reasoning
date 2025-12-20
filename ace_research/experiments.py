@@ -7,6 +7,7 @@ Simulates the three-agent workflow: Generator → Reflector → Curator.
 import json
 from typing import List, Dict
 import sqlite3
+from db import query_financial_fact, query_aggregate
 
 # ----------------------------
 # Agentic Roles
@@ -18,12 +19,49 @@ class Generator:
         self.playbook = playbook
 
     def generate(self, question: str) -> Dict:
-        reasoning = f"Step-by-step reasoning for: {question}"
-        answer = "42"  # placeholder for predicted result
+        reasoning = f"Interpreting the question: {question}"
+        
+        q = question.lower()
+        
+        if "revenue" in q:
+            metric = "revenue"
+        elif "net income" in q:
+            metric = "net_income"
+        else:
+            return {
+                "reasoning": "Metric not recognized",
+                "used_bullets": [],
+                "final_answer": None
+            }
+
+        aggregation_map = {
+            "total": "SUM",
+            "average": "AVG",
+            "sum": "SUM",
+            "avg": "AVG",
+            "mean": "AVG",
+            "max": "MAX",
+            "min": "MIN",
+            "count": "COUNT",
+        }
+
+        agg = None
+        for keyword, sql_agg in aggregation_map.items():
+            if keyword in q:
+                agg = sql_agg
+                reasoning += f" → Using SQL {sql_agg} aggregation on {metric}"
+                break
+        
+        if agg:
+            value = query_aggregate(metric, agg)
+        else:
+            value = query_financial_fact(metric, 2023)
+            reasoning += f" → querying SQL for ({metric}, 2023)"
+
         return {
             "reasoning": reasoning,
-            "used_bullets": [i for i in range(min(3, len(self.playbook)))],
-            "final_answer": answer
+            "used_bullets": list(range(min(3, len(self.playbook)))),
+            "final_answer": str(value)
         }
 
 class Reflector:
@@ -113,9 +151,18 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
         question = sample["question"] 
         gt = get_ground_truth(sample["metric"])
 
-
+        # Store unknown metric for learning instead of stopping with ValueError
         if gt is None:
-            raise ValueError(f"No ground truth found for metric: {sample['metric']}")
+            prediction = {
+                "final_answer": None,
+                "reasoning": f"Metric '{sample['metric']}' not found in database"
+            }
+            
+            store_prediction(question, None)
+            store_feedback(None, None, 0)
+
+            update_playbook(f"Metric '{sample['metric']}' requires derivation or is unsupported")
+            continue
 
         # Step 1: Generate
         prediction = generator.generate(question)
@@ -140,55 +187,12 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
 if __name__ == "__main__":
     mock_samples = [
+        {"question": "What is revenue for 2023?", "metric": "revenue"},
         {"question": "What is total revenue for 2023?", "metric": "revenue"},
-        {"question": "What is net income for 2023?", "metric": "net_income"}
+        {"question": "What is the average net income for 2023?", "metric": "net_income"},
+        {"question": "What is the mean revenue for 2023?", "metric": "revenue"},
+        {"question": "What is the max revenue for 2023?", "metric": "revenue"},
+        {"question": "What is operating margin for 2023?", "metric": "operating_margin"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
-
-
-# ----------------------------
-# Mock FiNER Experiment
-# ----------------------------
-import random
-import matplotlib.pyplot as plt
-
-def simulate_finer_adaptation(rounds=10):
-    """Simulate online context adaptation over multiple samples."""
-    mock_samples = [
-        {"question": "Revenue in Q1 2023?", "answer": "500"},
-        {"question": "Operating income in 2023?", "answer": "200"},
-        {"question": "Net income in 2023?", "answer": "150"},
-        {"question": "Total liabilities in 2023?", "answer": "700"},
-        {"question": "Earnings per share in 2023?", "answer": "2.1"},
-        {"question": "Gross profit margin in 2022?", "answer": "0.48"},
-        {"question": "Debt-to-equity ratio in 2023?", "answer": "1.5"},
-        {"question": "Cash flow from operations?", "answer": "320"},
-        {"question": "Total assets in 2023?", "answer": "1000"},
-        {"question": "Interest expense in 2023?", "answer": "75"}
-    ]
-
-    generator = Generator(["Always verify financial disclosures."])
-    reflector = Reflector()
-    curator = Curator()
-    playbook = generator.playbook.copy()
-
-    accuracies = []
-
-    for i in range(rounds):
-        sample = random.choice(mock_samples)
-        prediction = generator.generate(sample["question"])
-        reflection = reflector.reflect(prediction, sample["answer"])
-        playbook = curator.curate(playbook, reflection)
-        correct_count = 1 if reflection["correct"] else 0
-        accuracies.append(sum(accuracies[-3:]) / (len(accuracies[-3:]) + 1) + correct_count / 2)
-
-    plt.plot(range(1, rounds + 1), accuracies, marker='o')
-    plt.title("Simulated Online Adaptation Accuracy (FiNER-style)")
-    plt.xlabel("Adaptation Round")
-    plt.ylabel("Simulated Accuracy (normalized)")
-    plt.grid(True)
-    plt.show()
-
-#if __name__ == "__main__":
-#    simulate_finer_adaptation(rounds=12)
