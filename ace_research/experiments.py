@@ -7,6 +7,7 @@ Simulates the three-agent workflow: Generator → Reflector → Curator.
 import json
 from typing import List, Dict
 import sqlite3
+import re
 from db import query_financial_fact, query_aggregate
 
 # ----------------------------
@@ -22,6 +23,10 @@ class Generator:
         reasoning = f"Interpreting the question: {question}"
         
         q = question.lower()
+
+        years = re.findall(r"(20\d{2})", q)
+        year = int(years[0]) if years else 2023
+        reasoning += f" → inferred year={year}"
         
         if "revenue" in q:
             metric = "revenue"
@@ -53,10 +58,10 @@ class Generator:
                 break
         
         if agg:
-            value = query_aggregate(metric, agg)
+            value = query_aggregate(metric, agg, year)
         else:
-            value = query_financial_fact(metric, 2023)
-            reasoning += f" → querying SQL for ({metric}, 2023)"
+            value = query_financial_fact(metric, year)
+            reasoning += f" → querying SQL for ({metric}, {year})"
 
         return {
             "reasoning": reasoning,
@@ -67,8 +72,19 @@ class Generator:
 class Reflector:
     """Compares prediction vs. ground truth to extract insights."""
     def reflect(self, prediction: Dict, ground_truth: str) -> Dict:
-        correct = prediction["final_answer"] == ground_truth
-        key_insight = "Check calculation accuracy" if not correct else "Consistent reasoning"
+        try:
+            pred_val = float(prediction["final_answer"])
+            gt_val = float(ground_truth)
+            correct = abs(pred_val - gt_val) < 1e-6
+        except (TypeError, ValueError):
+            correct = False
+
+        key_insight = (
+            "Check calculation accuracy"
+            if not correct else
+            "Consistent reasoning"
+        )
+
         return {
             "correct": correct,
             "key_insight": key_insight,
@@ -130,7 +146,7 @@ def update_playbook(rule):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO agent_playbook (rule) VALUES (?)",
+        "INSERT OR IGNORE INTO agent_playbook (rule) VALUES (?)",
         (rule,)
     )
     conn.commit()
@@ -149,24 +165,28 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
     for sample in samples:
         question = sample["question"] 
-        gt = get_ground_truth(sample["metric"])
+        year = sample.get("year", 2023)
+        gt = get_ground_truth(sample["metric"], year)
 
         # Store unknown metric for learning instead of stopping with ValueError
         if gt is None:
-            prediction = {
-                "final_answer": None,
-                "reasoning": f"Metric '{sample['metric']}' not found in database"
-            }
-            
             store_prediction(question, None)
             store_feedback(None, None, 0)
 
-            update_playbook(f"Metric '{sample['metric']}' requires derivation or is unsupported")
-            continue
+            insight = f"Metric '{sample['metric']}' requires derivation or is unsupported"
 
+            reflection = {
+                "correct": False,
+                "key_insight": insight
+            }
+            playbook = curator.curate(playbook, reflection)
+            generator.playbook = playbook
+            update_playbook(insight)
+            continue
+        
         # Step 1: Generate
         prediction = generator.generate(question)
-
+        
         # Step 2: Reflect
         reflection = reflector.reflect(prediction, gt)
 
@@ -179,7 +199,7 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
         if not reflection["correct"]:
             update_playbook(reflection["key_insight"])
-
+        
 
 # ----------------------------
 # Example Run
@@ -192,7 +212,7 @@ if __name__ == "__main__":
         {"question": "What is the average net income for 2023?", "metric": "net_income"},
         {"question": "What is the mean revenue for 2023?", "metric": "revenue"},
         {"question": "What is the max revenue for 2023?", "metric": "revenue"},
-        {"question": "What is operating margin for 2023?", "metric": "operating_margin"}
+        {"question": "What is operating margin for 2023?", "metric": "operating_margin"},
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)

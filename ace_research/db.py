@@ -19,16 +19,20 @@ def query_financial_fact(metric: str, year: int):
     return row[0] if row else None
 
 
-def query_aggregate(metric: str, agg: str):
+def query_aggregate(metric: str, agg: str, year: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute(f"""
         SELECT {agg}(value)
         FROM financial_facts
-        WHERE metric = ?
-    """, (metric,))
+        WHERE metric = ? AND year = ?
+    """, (metric, year))
 
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
+
+if __name__ == "__main__":
+    print(query_financial_fact("revenue", 2023))
+    print(query_aggregate("revenue", "SUM", 2023))
