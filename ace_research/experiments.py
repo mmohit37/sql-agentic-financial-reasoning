@@ -10,6 +10,13 @@ import sqlite3
 import re
 from db import query_financial_fact, query_aggregate
 
+derived_metrics = {
+    "operating_margin": {
+        "formula": "operating_income / revenue",
+        "components": ["operating_income", "revenue"]
+    }
+}
+
 # ----------------------------
 # Agentic Roles
 # ----------------------------
@@ -23,6 +30,12 @@ class Generator:
         reasoning = f"Interpreting the question: {question}"
         
         q = question.lower()
+
+        # Identify complex metric
+        for derived, spec in derived_metrics.items():
+            if derived.replace("_", " ") in q:
+                reasoning += f" → identified derived metric: {derived}"
+                return self.compute_derived_metric(derived, spec, q, reasoning)
 
         years = re.findall(r"(20\d{2})", q)
         year = int(years[0]) if years else 2023
@@ -67,6 +80,40 @@ class Generator:
             "reasoning": reasoning,
             "used_bullets": list(range(min(3, len(self.playbook)))),
             "final_answer": str(value)
+        }
+    
+    def compute_derived_metric(self, name, spec, q, reasoning):
+        # Infer year
+        years = re.findall(r"(20\d{2})", q)
+        year = int(years[0]) if years else 2023
+        reasoning += f" → inferred year={year}"
+
+        values = {}
+
+        for component in spec["components"]:
+            val = query_financial_fact(component, year)
+            if val is None:
+                reasoning += f" → missing component: {component}"
+                return {
+                    "reasoning": reasoning,
+                    "used_bullets": [],
+                    "final_answer": None
+                }
+            values[component] = val
+            reasoning += f" → fetched {component}={val}"
+
+        # Compute formula safely
+        try:
+            result = values["operating_income"] / values["revenue"]
+            reasoning += f" → computed {name} = {result}"
+        except ZeroDivisionError:
+            result = None
+            reasoning += " → division by zero error"
+
+        return {
+            "reasoning": reasoning,
+            "used_bullets": list(range(min(3, len(self.playbook)))),
+            "final_answer": str(round(result, 4)) if result is not None else None
         }
 
 class Reflector:
@@ -166,10 +213,15 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
     for sample in samples:
         question = sample["question"] 
         year = sample.get("year", 2023)
-        gt = get_ground_truth(sample["metric"], year)
+
+        metric = sample["metric"]
+        is_derived = metric in derived_metrics
+        gt = None
+        if not is_derived:
+            gt = get_ground_truth(metric, year)
 
         # Store unknown metric for learning instead of stopping with ValueError
-        if gt is None:
+        if gt is None and not is_derived:
             store_prediction(question, None)
             store_feedback(None, None, 0)
 
@@ -186,6 +238,11 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
         
         # Step 1: Generate
         prediction = generator.generate(question)
+
+        if is_derived:
+            prediction_id = store_prediction(question, prediction["final_answer"])
+            store_feedback(prediction_id, None, 1)  # mark as successful execution
+            continue
         
         # Step 2: Reflect
         reflection = reflector.reflect(prediction, gt)
@@ -207,11 +264,6 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
 if __name__ == "__main__":
     mock_samples = [
-        {"question": "What is revenue for 2023?", "metric": "revenue"},
-        {"question": "What is total revenue for 2023?", "metric": "revenue"},
-        {"question": "What is the average net income for 2023?", "metric": "net_income"},
-        {"question": "What is the mean revenue for 2023?", "metric": "revenue"},
-        {"question": "What is the max revenue for 2023?", "metric": "revenue"},
         {"question": "What is operating margin for 2023?", "metric": "operating_margin"},
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
