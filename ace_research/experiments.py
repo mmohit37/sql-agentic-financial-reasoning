@@ -49,7 +49,10 @@ class Generator:
             return {
                 "reasoning": "Metric not recognized",
                 "used_bullets": [],
-                "final_answer": None
+                "final_answer": None,
+                "used_aggregation": False,
+                "is_derived": False,
+                "missing_components": True
             }
 
         aggregation_map = {
@@ -79,7 +82,10 @@ class Generator:
         return {
             "reasoning": reasoning,
             "used_bullets": list(range(min(3, len(self.playbook)))),
-            "final_answer": str(value)
+            "final_answer": str(value),
+            "used_aggregation": agg is not None,
+            "is_derived": False,
+            "missing_components": value is None
         }
     
     def compute_derived_metric(self, name, spec, q, reasoning):
@@ -97,7 +103,10 @@ class Generator:
                 return {
                     "reasoning": reasoning,
                     "used_bullets": [],
-                    "final_answer": None
+                    "final_answer": None,
+                    "used_aggregation": False,
+                    "is_derived": True,
+                    "missing_components": True
                 }
             values[component] = val
             reasoning += f" → fetched {component}={val}"
@@ -113,7 +122,10 @@ class Generator:
         return {
             "reasoning": reasoning,
             "used_bullets": list(range(min(3, len(self.playbook)))),
-            "final_answer": str(round(result, 4)) if result is not None else None
+            "final_answer": str(round(result, 4)) if result is not None else None,
+            "used_aggregation": False,
+            "is_derived": True,
+            "missing_components": False
         }
 
 class Reflector:
@@ -148,6 +160,22 @@ class Curator:
 # ----------------------------
 # Database Helpers
 # ----------------------------
+def compute_confidence(*, is_derived: bool, used_aggregation: bool, missing_components: bool) -> float:
+    confidence = 1.0
+
+    if used_aggregation:
+        confidence -= 0.1
+
+    if is_derived:
+        confidence -= 0.3
+
+    if missing_components:
+        confidence -= 0.4
+
+    # Enforce minimum confidence floor
+    return round(max(0.2, confidence), 2)
+
+
 
 def get_db_connection():
     return sqlite3.connect("../sql_course/agent.db")
@@ -165,12 +193,12 @@ def get_ground_truth(metric: str, year: int = 2023) -> str:
     return str(row[0]) if row else None
 
 
-def store_prediction(question, prediction):
+def store_prediction(question, prediction, confidence):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO agent_predictions (question, predicted_answer) VALUES (?, ?)",
-        (question, prediction)
+        "INSERT INTO agent_predictions (question, predicted_answer, confidence) VALUES (?, ?, ?)",
+        (question, prediction, confidence)
     )
     prediction_id = cur.lastrowid
     conn.commit()
@@ -220,9 +248,18 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
         if not is_derived:
             gt = get_ground_truth(metric, year)
 
+        # Step 1: Generate
+        prediction = generator.generate(question)
+
+        confidence = compute_confidence(
+            is_derived=prediction["is_derived"],
+            used_aggregation=prediction["used_aggregation"],
+            missing_components=prediction["missing_components"]
+        )
+
         # Store unknown metric for learning instead of stopping with ValueError
         if gt is None and not is_derived:
-            store_prediction(question, None)
+            store_prediction(question, None, confidence)
             store_feedback(None, None, 0)
 
             insight = f"Metric '{sample['metric']}' requires derivation or is unsupported"
@@ -235,12 +272,9 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
             generator.playbook = playbook
             update_playbook(insight)
             continue
-        
-        # Step 1: Generate
-        prediction = generator.generate(question)
 
         if is_derived:
-            prediction_id = store_prediction(question, prediction["final_answer"])
+            prediction_id = store_prediction(question, prediction["final_answer"], confidence)
             store_feedback(prediction_id, None, 1)  # mark as successful execution
             continue
         
@@ -251,7 +285,7 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
         playbook = curator.curate(playbook, reflection)
         generator.playbook = playbook
 
-        prediction_id = store_prediction(question, prediction["final_answer"])
+        prediction_id = store_prediction(question, prediction["final_answer"], confidence)
         store_feedback(prediction_id, gt, int(reflection["correct"]))
 
         if not reflection["correct"]:
@@ -264,7 +298,11 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
 if __name__ == "__main__":
     mock_samples = [
+        {"question": "What is revenue for 2023?", "metric": "revenue"},
+        {"question": "What is total revenue for 2023?", "metric": "revenue"},
+        {"question": "What is the average net income for 2023?", "metric": "net_income"},
         {"question": "What is operating margin for 2023?", "metric": "operating_margin"},
+        {"question": "What is EBITDA for 2023?", "metric": "ebitda"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
