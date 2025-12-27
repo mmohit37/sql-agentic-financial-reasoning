@@ -53,6 +53,9 @@ def get_available_metrics():
     conn.close()
     return [row[0] for row in rows]
 
+def get_available_aggregations():
+    return ["SUM", "AVG", "MIN", "MAX", "COUNT"]
+
 if __name__ == "__main__":
     print(query_financial_fact("revenue", 2023))
     print(query_aggregate("revenue", "SUM", 2023))

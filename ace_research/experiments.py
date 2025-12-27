@@ -9,7 +9,7 @@ from typing import List, Dict
 import sqlite3
 import re
 from collections import defaultdict
-from db import get_available_metrics, get_confidence_history
+from db import get_available_aggregations, get_available_metrics, get_confidence_history
 from db import query_financial_fact, query_aggregate
 
 derived_metrics = {
@@ -52,6 +52,19 @@ class Generator:
                 reasoning += f" → matched metric from schema: {metric}"
                 break
         
+        unsupported_aggs = ["median"]
+
+        for word in unsupported_aggs:
+            if word in q:
+                return {
+                    "reasoning": reasoning + f" → aggregation '{word}' not supported by schema",
+                    "used_bullets": [],
+                    "final_answer": None,
+                    "used_aggregation": False,
+                    "is_derived": False,
+                    "missing_components": True
+                }        
+
         if metric is None:
             return {
                 "reasoning": reasoning + " → no metric found in DB schema",
@@ -62,7 +75,7 @@ class Generator:
                 "missing_components": True
             }
 
-        aggregation_map = {
+        intent_to_agg = {
             "total": "SUM",
             "average": "AVG",
             "sum": "SUM",
@@ -73,12 +86,28 @@ class Generator:
             "count": "COUNT",
         }
 
-        agg = None
-        for keyword, sql_agg in aggregation_map.items():
-            if keyword in q:
-                agg = sql_agg
-                reasoning += f" → Using SQL {sql_agg} aggregation on {metric}"
+        requested_agg = None
+        for word, agg in intent_to_agg.items():
+            if word in q:
+                requested_agg = agg
                 break
+        
+        available_aggs = get_available_aggregations()
+
+        if requested_agg in available_aggs:
+            agg = requested_agg
+        else:
+            agg = None
+        
+        if requested_agg and requested_agg not in available_aggs:
+            return {
+                "reasoning": reasoning + f" → aggregation '{requested_agg}' not supported by schema",
+                "used_bullets": [],
+                "final_answer": None,
+                "used_aggregation": False,
+                "is_derived": False,
+                "missing_components": True
+            }
         
         if agg:
             value = query_aggregate(metric, agg, year)
@@ -346,7 +375,7 @@ def print_confidence_trends():
 if __name__ == "__main__":
     mock_samples = [
         {"question": "What is revenue for 2023?", "metric": "revenue"},
-        {"question": "What is total revenue for 2023?", "metric": "revenue"},
+        {"question": "What is the median revenue for 2023?", "metric": "revenue"},
         {"question": "What is the average net income for 2023?", "metric": "net_income"},
         {"question": "What is operating margin for 2023?", "metric": "operating_margin"},
         {"question": "What is EBITDA for 2023?", "metric": "ebitda"}
