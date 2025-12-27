@@ -9,7 +9,7 @@ from typing import List, Dict
 import sqlite3
 import re
 from collections import defaultdict
-from db import get_confidence_history
+from db import get_available_metrics, get_confidence_history
 from db import query_financial_fact, query_aggregate
 
 derived_metrics = {
@@ -43,13 +43,18 @@ class Generator:
         year = int(years[0]) if years else 2023
         reasoning += f" → inferred year={year}"
         
-        if "revenue" in q:
-            metric = "revenue"
-        elif "net income" in q:
-            metric = "net_income"
-        else:
+        available_metrics = get_available_metrics()
+
+        metric = None
+        for m in available_metrics:
+            if m.replace("_", " ") in q:
+                metric = m
+                reasoning += f" → matched metric from schema: {metric}"
+                break
+        
+        if metric is None:
             return {
-                "reasoning": "Metric not recognized",
+                "reasoning": reasoning + " → no metric found in DB schema",
                 "used_bullets": [],
                 "final_answer": None,
                 "used_aggregation": False,

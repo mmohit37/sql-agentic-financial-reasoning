@@ -39,11 +39,19 @@ def get_confidence_history():
     cur.execute("""
         SELECT question, confidence, timestamp
         FROM agent_predictions
-        ORDER BY timestamp
+        ORDER BY timestamp ASC
     """)
     rows = cur.fetchall()
     conn.close()
     return rows
+
+def get_available_metrics():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT metric FROM financial_facts")
+    rows = cur.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
 
 if __name__ == "__main__":
     print(query_financial_fact("revenue", 2023))
