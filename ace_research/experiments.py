@@ -8,6 +8,8 @@ import json
 from typing import List, Dict
 import sqlite3
 import re
+from collections import defaultdict
+from db import get_confidence_history
 from db import query_financial_fact, query_aggregate
 
 derived_metrics = {
@@ -227,6 +229,22 @@ def update_playbook(rule):
     conn.commit()
     conn.close()
 
+def summarize_confidence_trends(rows):
+    total = len(rows)
+    avg_conf = sum(r[1] for r in rows if r[1] is not None) / total
+
+    by_metric = {}
+    for q, conf, _ in rows:
+        metric = q.lower().split(" is ")[-1]
+        by_metric.setdefault(metric, []).append(conf)
+
+    print(f"\nAverage confidence overall: {round(avg_conf, 2)}")
+    print("\nConfidence by metric:")
+    for metric, vals in by_metric.items():
+        print(metric, "→", round(sum(vals)/len(vals), 2))
+        if min(vals) < 0.5:
+            print("⚠️ Unstable metric detected:", metric)
+
 # ----------------------------
 # ACE Simulation
 # ----------------------------
@@ -290,7 +308,31 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
         if not reflection["correct"]:
             update_playbook(reflection["key_insight"])
-        
+
+def print_confidence_trends():
+    rows = get_confidence_history()
+
+    if not rows:
+        print("No confidence data found.")
+        return
+
+    metric_confidence = defaultdict(list)
+
+    for question, confidence, *_ in rows:
+        q = question.lower()
+        if "revenue" in q:
+            metric_confidence["revenue"].append(confidence)
+        elif "net income" in q:
+            metric_confidence["net_income"].append(confidence)
+        elif "operating margin" in q:
+            metric_confidence["operating_margin"].append(confidence)
+        else:
+            metric_confidence["other"].append(confidence)
+
+    print("\n=== Confidence Trend Summary ===")
+    for metric, values in metric_confidence.items():
+        avg = round(sum(values) / len(values), 3)
+        print(f"{metric}: avg={avg}, min={min(values)}, max={max(values)}")
 
 # ----------------------------
 # Example Run
@@ -306,3 +348,4 @@ if __name__ == "__main__":
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
+    print_confidence_trends()

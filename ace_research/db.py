@@ -33,6 +33,18 @@ def query_aggregate(metric: str, agg: str, year: int):
     conn.close()
     return row[0] if row else None
 
+def get_confidence_history():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT question, confidence, timestamp
+        FROM agent_predictions
+        ORDER BY timestamp
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
 if __name__ == "__main__":
     print(query_financial_fact("revenue", 2023))
     print(query_aggregate("revenue", "SUM", 2023))
