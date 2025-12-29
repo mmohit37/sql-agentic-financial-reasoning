@@ -16,6 +16,30 @@ derived_metrics = {
     "operating_margin": {
         "formula": "operating_income / revenue",
         "components": ["operating_income", "revenue"]
+    },
+    "gross_margin": {
+        "formula": "gross_profit / revenue",
+        "components": ["gross_profit", "revenue"]
+    },
+    "net_margin": {
+        "formula": "net_income / revenue",
+        "components": ["net_income", "revenue"]
+    },
+    "return_on_assets": {
+        "formula": "net_income / total_assets",
+        "components": ["net_income", "total_assets"]
+    },
+    "return_on_equity": {
+        "formula": "net_income / total_equity",
+        "components": ["net_income", "total_equity"]
+    },
+    "debt_to_equity": {
+        "formula": "total_liabilities / total_equity",
+        "components": ["total_liabilities", "total_equity"]
+    },
+    "current_ratio": {
+        "formula": "current_assets / current_liabilities",
+        "components": ["current_assets", "current_liabilities"]
     }
 }
 
@@ -112,7 +136,7 @@ class Generator:
         if agg:
             value = query_aggregate(metric, agg, year)
         else:
-            value = query_financial_fact(metric, year)
+            value = query_financial_fact(metric, year, company="ACME Corp")
             reasoning += f" → querying SQL for ({metric}, {year})"
 
         return {
@@ -133,7 +157,7 @@ class Generator:
         values = {}
 
         for component in spec["components"]:
-            val = query_financial_fact(component, year)
+            val = query_financial_fact(component, year, company="ACME Corp")
             if val is None:
                 reasoning += f" → missing component: {component}"
                 return {
@@ -149,7 +173,7 @@ class Generator:
 
         # Compute formula safely
         try:
-            result = values["operating_income"] / values["revenue"]
+            result = eval(spec["formula"], {}, values)
             reasoning += f" → computed {name} = {result}"
         except ZeroDivisionError:
             result = None
@@ -378,7 +402,10 @@ if __name__ == "__main__":
         {"question": "What is the median revenue for 2023?", "metric": "revenue"},
         {"question": "What is the average net income for 2023?", "metric": "net_income"},
         {"question": "What is operating margin for 2023?", "metric": "operating_margin"},
-        {"question": "What is EBITDA for 2023?", "metric": "ebitda"}
+        {"question": "What is EBITDA for 2023?", "metric": "ebitda"},
+        {"question": "What is return on assets for 2023?", "metric": "return_on_assets"},
+        {"question": "What is debt to equity for 2023?", "metric": "debt_to_equity"},
+        {"question": "What is current ratio for 2023?", "metric": "current_ratio"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
