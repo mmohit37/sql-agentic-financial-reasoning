@@ -43,6 +43,13 @@ derived_metrics = {
     }
 }
 
+trend_keywords = {
+    "trend": ["trend", "over time", "across years"],
+    "increase": ["increase", "increasing", "growth", "grew", "rising"],
+    "decrease": ["decrease", "declining", "drop", "fell", "falling"],
+    "compare": ["compare", "comparison", "vs", "versus"]
+}
+
 # ----------------------------
 # Agentic Roles
 # ----------------------------
@@ -110,6 +117,20 @@ class Generator:
             "count": "COUNT",
         }
 
+        if any(word in q for word in trend_keywords["trend"]):
+            years = [2021, 2022, 2023]
+            trend_result = analyze_trend(metric, years)
+
+            return {
+                "reasoning": reasoning + f" → analyzed trend over {years}",
+                "final_answer": trend_result["trend"],
+                "trend_values": trend_result["values"],
+                "used_aggregation": False,
+                "is_derived": False,
+                "is_trend": True,
+                "missing_components": False
+        }
+
         requested_agg = None
         for word, agg in intent_to_agg.items():
             if word in q:
@@ -170,10 +191,18 @@ class Generator:
                 }
             values[component] = val
             reasoning += f" → fetched {component}={val}"
+        
+        safe_locals = {
+            **values,
+            "abs": abs,
+            "min": min,
+            "max": max,
+            "round": round
+        }
 
         # Compute formula safely
         try:
-            result = eval(spec["formula"], {}, values)
+            result = eval(spec["formula"], {"__builtins__": {}}, safe_locals)
             reasoning += f" → computed {name} = {result}"
         except ZeroDivisionError:
             result = None
@@ -235,7 +264,37 @@ def compute_confidence(*, is_derived: bool, used_aggregation: bool, missing_comp
     # Enforce minimum confidence floor
     return round(max(0.2, confidence), 2)
 
+def analyze_trend(metric: str, years: list[int]) -> dict:
+    """
+    Analyze multi-year trend for a metric.
+    Returns values + trend direction.
+    """
+    values = []
 
+    for year in years:
+        val = query_financial_fact(metric, year)
+        if val is not None:
+            values.append((year, val))
+
+    if len(values) < 2:
+        return {
+            "values": values,
+            "trend": "insufficient data"
+        }
+
+    diffs = [values[i+1][1] - values[i][1] for i in range(len(values)-1)]
+
+    if all(d > 0 for d in diffs):
+        trend = "increasing"
+    elif all(d < 0 for d in diffs):
+        trend = "decreasing"
+    else:
+        trend = "mixed"
+
+    return {
+        "values": values,
+        "trend": trend
+    }
 
 def get_db_connection():
     return sqlite3.connect("../sql_course/agent.db")
@@ -405,7 +464,9 @@ if __name__ == "__main__":
         {"question": "What is EBITDA for 2023?", "metric": "ebitda"},
         {"question": "What is return on assets for 2023?", "metric": "return_on_assets"},
         {"question": "What is debt to equity for 2023?", "metric": "debt_to_equity"},
-        {"question": "What is current ratio for 2023?", "metric": "current_ratio"}
+        {"question": "What is current ratio for 2023?", "metric": "current_ratio"},
+        {"question": "What is the revenue trend?", "metric": "revenue"},
+        {"question": "How has net income changed over time?", "metric": "net_income"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)

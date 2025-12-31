@@ -56,6 +56,21 @@ def get_available_metrics():
 def get_available_aggregations():
     return ["SUM", "AVG", "MIN", "MAX", "COUNT"]
 
+def query_metric_over_years(metric: str, company: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT year, value
+        FROM financial_facts
+        WHERE metric = ? AND company = ?
+        ORDER BY year
+    """, (metric, company))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
 if __name__ == "__main__":
     print(query_financial_fact("revenue", 2023))
     print(query_aggregate("revenue", "SUM", 2023))
