@@ -45,6 +45,14 @@ def get_confidence_history():
     conn.close()
     return rows
 
+def get_available_years():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT year FROM financial_facts ORDER BY year")
+    rows = cur.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
 def get_available_metrics():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -59,7 +67,7 @@ def get_available_aggregations():
 def query_metric_over_years(metric: str, company: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     cursor.execute("""
         SELECT year, value
         FROM financial_facts

@@ -9,7 +9,7 @@ from typing import List, Dict
 import sqlite3
 import re
 from collections import defaultdict
-from db import get_available_aggregations, get_available_metrics, get_confidence_history
+from db import get_available_aggregations, get_available_metrics, get_confidence_history, get_available_years
 from db import query_financial_fact, query_aggregate
 
 derived_metrics = {
@@ -40,6 +40,10 @@ derived_metrics = {
     "current_ratio": {
         "formula": "current_assets / current_liabilities",
         "components": ["current_assets", "current_liabilities"]
+    },
+    "ebitda_margin": {
+        "formula": "ebitda / revenue",
+        "components": ["ebitda", "revenue"]
     }
 }
 
@@ -118,7 +122,7 @@ class Generator:
         }
 
         if any(word in q for word in trend_keywords["trend"]):
-            years = [2021, 2022, 2023]
+            years = get_available_years()
             trend_result = analyze_trend(metric, years)
 
             return {
@@ -460,13 +464,14 @@ if __name__ == "__main__":
         {"question": "What is revenue for 2023?", "metric": "revenue"},
         {"question": "What is the median revenue for 2023?", "metric": "revenue"},
         {"question": "What is the average net income for 2023?", "metric": "net_income"},
-        {"question": "What is operating margin for 2023?", "metric": "operating_margin"},
+        {"question": "What is the operating margin trend?", "metric": "operating_margin"},
         {"question": "What is EBITDA for 2023?", "metric": "ebitda"},
         {"question": "What is return on assets for 2023?", "metric": "return_on_assets"},
         {"question": "What is debt to equity for 2023?", "metric": "debt_to_equity"},
         {"question": "What is current ratio for 2023?", "metric": "current_ratio"},
         {"question": "What is the revenue trend?", "metric": "revenue"},
-        {"question": "How has net income changed over time?", "metric": "net_income"}
+        {"question": "How has net income changed over time?", "metric": "net_income"},
+        {"question": "What is the EBITDA margin trend?", "metric": "ebitda"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
