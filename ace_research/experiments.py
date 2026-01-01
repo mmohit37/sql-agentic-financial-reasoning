@@ -85,6 +85,9 @@ class Generator:
         if not companies:
             companies = ["ACME Corp"]
         
+        comparison_keywords = ["vs", "versus", "compare", "comparison", "and"]
+        is_comparison = any(k in q for k in comparison_keywords) and len(companies) > 1
+
         available_metrics = get_available_metrics()
 
         metric = None
@@ -177,7 +180,10 @@ class Generator:
             
             results[company] = value
         
-        value = results[companies[0]]
+        if is_comparison:
+            value = results
+        else:
+            value = results[companies[0]]
 
         return {
             "reasoning": reasoning,
@@ -185,7 +191,13 @@ class Generator:
             "final_answer": str(value),
             "used_aggregation": agg is not None,
             "is_derived": False,
-            "missing_components": value is None
+            "missing_components": (
+                any(v is None for v in value.values())
+                if is_comparison
+                else value is None
+            ),
+            "is_comparison": is_comparison,
+            "companies": companies
         }
     
     def compute_derived_metric(self, name, spec, q, reasoning):
@@ -499,7 +511,9 @@ if __name__ == "__main__":
         {"question": "What is ACME Corp revenue for 2023?", "metric": "revenue"},
         {"question": "What is the average ACME Corp net income for 2023?", "metric": "net_income"},
         {"question": "What is the ACME Corp revenue trend?", "metric": "revenue"},
-        {"question": "What is the median ACME Corp revenue for 2023?", "metric": "revenue"}
+        {"question": "What is the median ACME Corp revenue for 2023?", "metric": "revenue"},
+        {"question": "Compare ACME Corp and ACME Corp revenue for 2023", "metric": "revenue"},
+        {"question": "ACME Corp vs ACME Corp net income for 2023", "metric": "net_income"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
