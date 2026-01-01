@@ -2,7 +2,9 @@ import os
 import requests
 from arelle import Cntlr
 
-from ace_research.xbrl.mappings import XBRL_METRIC_MAP  # not used yet, but kept for next steps
+from ace_research.xbrl.mappings import XBRL_METRIC_MAP
+from ace_research.db import insert_financial_fact
+from collections import Counter
 
 
 # ----------------------------
@@ -101,8 +103,86 @@ def ingest_company_xbrl(company: str, cik: str, years: list[int]) -> None:
             print("Arelle successfully loaded inline XBRL.")
             print(f"   Facts detected: {len(model_xbrl.facts)}")
 
+            concept_counter = Counter()
+
+            for fact in model_xbrl.facts:
+                try:
+                    concept_counter[fact.qname.localName] += 1
+                except Exception:
+                    continue
+
+            print("\nTop 30 concepts in this filing:")
+            for name, count in concept_counter.most_common(30):
+                print(f"{name}: {count}")
+
+            facts = model_xbrl.facts
+
+            inserted = 0
+            skipped = 0
+
+            for fact in facts:
+                try:
+                    if fact.isNil:
+                        skipped += 1
+                        continue
+
+                    concept = fact.qname.localName
+
+                    if concept not in XBRL_METRIC_MAP:
+                        skipped += 1
+                        continue
+                    
+                    metric = XBRL_METRIC_MAP[concept]
+
+                    if fact.value is None:
+                        skipped += 1
+                        continue
+
+                    if fact.unit is None and not isinstance(fact.value, (int, float, str)):
+                        skipped += 1
+                        continue
+
+                    try:
+                        value = float(fact.value)
+                    except (TypeError, ValueError):
+                        skipped += 1
+                        continue
+
+                    ctx = model_xbrl.contexts.get(fact.contextID)
+                    if ctx is None:
+                        skipped += 1
+                        continue
+
+                    # Determine year from context
+                    year = None
+
+                    if ctx.endDatetime:
+                        year = ctx.endDatetime.year
+                    elif ctx.instantDatetime:
+                        year = ctx.instantDatetime.year
+                    elif ctx.startDatetime:
+                        year = ctx.startDatetime.year
+
+                    # If we still can't infer a year, skip
+                    if year is None:
+                        skipped += 1
+                        continue
+
+                    # Optional: soften year filtering for now
+                    if years and year not in years:
+                        skipped += 1
+                        continue
+
+                    insert_financial_fact(company = company, year = year, metric = metric, value = value)
+                    inserted += 1
+
+                except Exception:
+                    skipped += 1
+                    continue
+
+            print(f"Inserted {inserted} facts, skipped {skipped}")
+
         # Only validate one filing for now
         break
-
 
 print("ingest.py loaded")

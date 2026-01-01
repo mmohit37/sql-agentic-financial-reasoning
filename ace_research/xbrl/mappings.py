@@ -1,19 +1,26 @@
 # ace_research/xbrl/mappings.py
 
 XBRL_METRIC_MAP = {
-    # Income Statement
+    # Revenue
+    "RevenueFromContractWithCustomerExcludingAssessedTax": "revenue",
     "Revenues": "revenue",
+
+    # Income
     "NetIncomeLoss": "net_income",
+    "ProfitLoss": "net_income",
     "OperatingIncomeLoss": "operating_income",
-    "GrossProfit": "gross_profit",
 
     # Balance Sheet
     "Assets": "total_assets",
-    "Liabilities": "total_liabilities",
-    "StockholdersEquity": "total_equity",
     "AssetsCurrent": "current_assets",
+
+    "Liabilities": "total_liabilities",
     "LiabilitiesCurrent": "current_liabilities",
 
-    # Cash / derived support
-    "EarningsBeforeInterestTaxesDepreciationAmortization": "ebitda",
+    "StockholdersEquity": "total_equity",
+
+    # Cash & equivalents (optional but useful)
+    "CashAndCashEquivalentsAtCarryingValue": "cash_and_equivalents",
+    "ShortTermInvestments": "short_term_investments",
+    "LongTermInvestments": "long_term_investments",
 }

@@ -105,6 +105,18 @@ def query_metric_over_years(metric: str, company: str):
     conn.close()
     return rows
 
+def insert_financial_fact(company: str, year: int, metric: str, value: float):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO financial_facts (company, year, metric, value)
+        VALUES (?, ?, ?, ?)
+    """, (company, year, metric, value))
+
+    conn.commit()
+    conn.close()
+
 if __name__ == "__main__":
     print(query_financial_fact("revenue", 2023))
     print(query_aggregate("revenue", "SUM", 2023))
