@@ -18,6 +18,47 @@ def query_financial_fact(metric: str, year: int, company: str = "ACME Corp"):
     conn.close()
     return row[0] if row else None
 
+def get_canonical_financial_fact(metric: str, year: int, company: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT MAX(value)
+        FROM financial_facts
+        WHERE metric = ? AND year = ? AND company = ?
+    """, (metric, year, company))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    return row[0] if row and row[0] is not None else None
+
+def get_canonical_timeseries(company: str, metric: str, years: list[int]):
+    """
+    Returns a list of (year, value) pairs using canonical facts only.
+    """
+    series = []
+    for year in sorted(years):
+        value = get_canonical_financial_fact(metric, year, company)
+        if value is not None:
+            series.append((year, value))
+    return series
+
+def get_all_canonical_facts(company: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT company, year, metric, MAX(value) as value
+        FROM financial_facts
+        WHERE company = ?
+        GROUP BY company, year, metric
+        ORDER BY year, metric
+    """, (company,))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 def query_aggregate(metric: str, agg: str, year: int, company: str = "ACME Corp"):
     conn = sqlite3.connect(DB_PATH)
@@ -110,7 +151,7 @@ def insert_financial_fact(company: str, year: int, metric: str, value: float):
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO financial_facts (company, year, metric, value)
+        INSERT OR REPLACE INTO financial_facts (company, year, metric, value)
         VALUES (?, ?, ?, ?)
     """, (company, year, metric, value))
 

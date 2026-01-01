@@ -10,7 +10,7 @@ import sqlite3
 import re
 from collections import defaultdict
 from db import get_available_aggregations, get_available_metrics, get_confidence_history, get_available_years, get_available_companies
-from db import query_financial_fact, query_aggregate
+from db import query_aggregate, get_canonical_financial_fact
 
 derived_metrics = {
     "operating_margin": {
@@ -212,7 +212,7 @@ class Generator:
                 value = query_aggregate(metric, agg, year, company)
                 reasoning += f" → querying SQL for ({agg}({metric}), {year}, {company})"
             else:
-                value = query_financial_fact(metric, year, company)
+                value = get_canonical_financial_fact(metric, year, company)
                 reasoning += f" → querying SQL for ({metric}, {year}, {company})"
             
             results[company] = value
@@ -253,7 +253,7 @@ class Generator:
             values = {}
 
             for component in components:
-                val = query_financial_fact(component, year, company)
+                val = get_canonical_financial_fact(component, year, company)
                 if val is None:
                     reasoning += f" → missing {component} for {company}"
                     values = None
@@ -358,7 +358,7 @@ def analyze_trend(metric: str, years: list[int], company) -> dict:
     values = []
 
     for year in years:
-        val = query_financial_fact(metric, year, company)
+        val = get_canonical_financial_fact(metric, year, company)
         if val is not None:
             values.append((year, val))
 
@@ -552,13 +552,15 @@ def print_confidence_trends():
 
 if __name__ == "__main__":
     mock_samples = [
-        {"question": "What is the ACME EBITDA margin for 2023?", "metric": "ebitda"},
-        {"question": "Compare ACME Corp and ACME Corp EBITDA margin for 2023", "metric": "ebitda"},
-        {"question": "What is ACME Corp return on assets for 2023?", "metric": "return_on_assets"},
-        {"question": "What is the ACME Corp revenue trend?", "metric": "revenue"},
-        {"question": "What is the median ACME Corp revenue for 2023?", "metric": "revenue"},
-        {"question": "Compare ACME Corp and ACME Corp revenue for 2023", "metric": "revenue"},
-        {"question": "ACME Corp vs ACME Corp net income for 2023", "metric": "net_income"}
+        {"question": "What is the Microsoft's revenue for 2021?", "metric": "revenue"},
+        {"question": "What is Microsoft net income for 2021?", "metric": "net_income"},
+        {"question": "What is Microsoft operating income for 2021?", "metric": "operating_income"},
+        {"question": "What is Microsoft operating margin for 2023?", "metric": "operating_margin"},
+        {"question": "What is Microsoft EBITDA margin for 2015?", "metric": "revenue"},
+        {"question": "What is Microsoft net margin for 2022?", "metric": "net_margin"},
+        {"question": "Compare Microsoft and ACME net income for 2022", "metric": "net_income"},
+        {"question": "What is Microsoft's revenue trend", "metric": "revenue"},
+        {"question": "How has Microsoft's net income changed over time", "metric": "net_income"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)

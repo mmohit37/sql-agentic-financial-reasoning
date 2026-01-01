@@ -5,6 +5,7 @@ from arelle import Cntlr
 from ace_research.xbrl.mappings import XBRL_METRIC_MAP
 from ace_research.db import insert_financial_fact
 from collections import Counter
+from datetime import timedelta
 
 
 # ----------------------------
@@ -110,15 +111,19 @@ def ingest_company_xbrl(company: str, cik: str, years: list[int]) -> None:
                     concept_counter[fact.qname.localName] += 1
                 except Exception:
                     continue
+            
+            DEBUG_CONCEPTS = False
 
-            print("\nTop 30 concepts in this filing:")
-            for name, count in concept_counter.most_common(30):
-                print(f"{name}: {count}")
+            if DEBUG_CONCEPTS:
+                print("\nTop 30 concepts in this filing:")
+                for name, count in concept_counter.most_common(30):
+                    print(f"{name}: {count}")
 
             facts = model_xbrl.facts
 
             inserted = 0
             skipped = 0
+            canonical_facts = {}
 
             for fact in facts:
                 try:
@@ -153,36 +158,83 @@ def ingest_company_xbrl(company: str, cik: str, years: list[int]) -> None:
                         skipped += 1
                         continue
 
-                    # Determine year from context
-                    year = None
+                    # Require full fiscal year duration
+                    if not is_full_year_context(ctx):
+                        skipped += 1
+                        continue
 
-                    if ctx.endDatetime:
-                        year = ctx.endDatetime.year
-                    elif ctx.instantDatetime:
-                        year = ctx.instantDatetime.year
-                    elif ctx.startDatetime:
-                        year = ctx.startDatetime.year
+                    # Require consolidated context
+                    if not is_consolidated_context(ctx):
+                        skipped += 1
+                        continue
 
-                    # If we still can't infer a year, skip
+                    year = ctx.endDatetime.year
+
                     if year is None:
                         skipped += 1
                         continue
 
-                    # Optional: soften year filtering for now
                     if years and year not in years:
                         skipped += 1
                         continue
 
-                    insert_financial_fact(company = company, year = year, metric = metric, value = value)
-                    inserted += 1
+                    print(
+                        f"ACCEPTED | {company} | {year} | {metric} | {value}"
+                    )
+
+                    key = (company, year, metric)
+
+                    if key not in canonical_facts:
+                        canonical_facts[key] = value
+                    else:
+                    # Keep the strongest signal (simple + safe)
+                        canonical_facts[key] = max(
+                            canonical_facts[key],
+                            value,
+                            key=lambda v: abs(v)
+                        )
 
                 except Exception:
                     skipped += 1
                     continue
+            
+            for (company, year, metric), value in canonical_facts.items():
+                insert_financial_fact(
+                    company=company,
+                    year=year,
+                    metric=metric,
+                    value=value
+                )
+                
+                inserted += 1
 
             print(f"Inserted {inserted} facts, skipped {skipped}")
 
         # Only validate one filing for now
         break
 
-print("ingest.py loaded")
+
+def is_full_year_context(ctx) -> bool:
+    """
+    Accept only duration contexts that span ~1 fiscal year.
+    """
+    if ctx is None:
+        return False
+
+    if ctx.startDatetime is None or ctx.endDatetime is None:
+        return False
+
+    duration = ctx.endDatetime - ctx.startDatetime
+
+    # Accept ~1 year (allow filing variance)
+    return timedelta(days=330) <= duration <= timedelta(days=400)
+
+def is_consolidated_context(ctx) -> bool:
+    """
+    Reject segment-specific facts.
+    """
+    if ctx is None:
+        return False
+
+    # Arelle stores dimensions here
+    return not ctx.qnameDims
