@@ -68,25 +68,32 @@ class Generator:
         
         q = question.lower()
 
-        # Identify complex metric
-        for derived, spec in derived_metrics.items():
-            if derived.replace("_", " ") in q:
-                reasoning += f" → identified derived metric: {derived}"
-                return self.compute_derived_metric(derived, spec, q, reasoning)
-
-        years = re.findall(r"(20\d{2})", q)
-        year = int(years[0]) if years else 2023
-        reasoning += f" → inferred year={year}"
-
         available_companies = get_available_companies()
         companies = infer_companies(q, available_companies)
 
         # Fallback
         if not companies:
             companies = ["ACME Corp"]
+
+        years = re.findall(r"(20\d{2})", q)
+        year = int(years[0]) if years else 2023
+        reasoning += f" → inferred year={year}"
         
         comparison_keywords = ["vs", "versus", "compare", "comparison", "and"]
         is_comparison = any(k in q for k in comparison_keywords) and len(companies) > 1
+
+        # Identify complex metric
+        for derived, spec in derived_metrics.items():
+            if derived.replace("_", " ") in q:
+                reasoning += f" → identified derived metric: {derived}"
+                return self.compute_derived_metric(
+                    derived, 
+                    spec, 
+                    q, 
+                    reasoning,
+                    companies,
+                    year,
+                    is_comparison)
 
         available_metrics = get_available_metrics()
 
@@ -132,18 +139,48 @@ class Generator:
         }
 
         if any(word in q for word in trend_keywords["trend"]):
-            years = get_available_years()
-            trend_result = analyze_trend(metric, years)
+            trend_results = {}
 
+            for company in companies:
+                years = get_available_years(company=company)
+                trend_result = analyze_trend(metric, years, company=company)
+                trend_results[company] = trend_result
+
+            if is_comparison:
+                return {
+                    "reasoning": reasoning + f" → analyzed trend per company",
+                    "final_answer": {
+                        company: trend_results[company]["trend"]
+                        for company in trend_results
+                        },
+                    "trend_values": {
+                        company: trend_results[company]["values"]
+                        for company in trend_results
+                        },
+                    "used_aggregation": False,
+                    "is_derived": False,
+                    "is_trend": True,
+                    "is_comparison": True,
+                    "companies": companies,
+                    "missing_components": any(
+                not trend_results[c]["values"] for c in trend_results
+                 )
+                }
+
+            # single-company fallback
+            company = companies[0]
             return {
-                "reasoning": reasoning + f" → analyzed trend over {years}",
-                "final_answer": trend_result["trend"],
-                "trend_values": trend_result["values"],
+                "reasoning": reasoning + f" → analyzed trend for {company}",
+                "final_answer": trend_results[company]["trend"],
+                "trend_values": trend_results[company]["values"],
                 "used_aggregation": False,
                 "is_derived": False,
                 "is_trend": True,
-                "missing_components": False
-        }
+                "is_comparison": False,
+                "companies": companies,
+                "missing_components": not trend_results[company]["values"]
+            }
+
 
         requested_agg = None
         for word, agg in intent_to_agg.items():
@@ -200,52 +237,70 @@ class Generator:
             "companies": companies
         }
     
-    def compute_derived_metric(self, name, spec, q, reasoning):
-        # Infer year
-        years = re.findall(r"(20\d{2})", q)
-        year = int(years[0]) if years else 2023
-        reasoning += f" → inferred year={year}"
+    def compute_derived_metric(self, name, spec, q, reasoning, companies, year, is_comparison):
+        formula = spec["formula"]
 
-        values = {}
+        # Extract components
+        components = [
+            token for token in formula.replace("(", "").replace(")", "").split()
+            if token.isidentifier()
+        ]
 
-        for component in spec["components"]:
-            val = query_financial_fact(component, year, company="ACME Corp")
-            if val is None:
-                reasoning += f" → missing component: {component}"
-                return {
-                    "reasoning": reasoning,
-                    "used_bullets": [],
-                    "final_answer": None,
-                    "used_aggregation": False,
-                    "is_derived": True,
-                    "missing_components": True
+        results = {}
+        missing = {}
+
+        for company in companies:
+            values = {}
+
+            for component in components:
+                val = query_financial_fact(component, year, company)
+                if val is None:
+                    reasoning += f" → missing {component} for {company}"
+                    values = None
+                    break
+                values[component] = val
+                reasoning += f" → fetched {component}={val} for {company}"
+
+            if values is None:
+                results[company] = None
+                missing[company] = True
+                continue
+
+            try:
+                safe_locals = {
+                    **values,
+                    "abs": abs,
+                    "min": min,
+                    "max": max,
+                    "round": round
                 }
-            values[component] = val
-            reasoning += f" → fetched {component}={val}"
-        
-        safe_locals = {
-            **values,
-            "abs": abs,
-            "min": min,
-            "max": max,
-            "round": round
-        }
+                result = eval(formula, {"__builtins__": {}}, safe_locals)
+                results[company] = round(result, 4)
+                missing[company] = False
+                reasoning += f" → computed {name}={result} for {company}"
+            except ZeroDivisionError:
+                results[company] = None
+                missing[company] = True
+                reasoning += f" → division by zero for {company}"
 
-        # Compute formula safely
-        try:
-            result = eval(spec["formula"], {"__builtins__": {}}, safe_locals)
-            reasoning += f" → computed {name} = {result}"
-        except ZeroDivisionError:
-            result = None
-            reasoning += " → division by zero error"
+        # Decide return shape
+        if is_comparison:
+            final_answer = results
+            missing_components = any(missing.values())
+        else:
+            company = companies[0]
+            final_answer = str(results[company])
+            missing_components = missing[company]
 
         return {
             "reasoning": reasoning,
             "used_bullets": list(range(min(3, len(self.playbook)))),
-            "final_answer": str(round(result, 4)) if result is not None else None,
+            "final_answer": final_answer,
             "used_aggregation": False,
             "is_derived": True,
-            "missing_components": False
+            "missing_components": missing_components,
+            "is_comparison": is_comparison,
+            "companies": companies
         }
 
 class Reflector:
@@ -295,7 +350,7 @@ def compute_confidence(*, is_derived: bool, used_aggregation: bool, missing_comp
     # Enforce minimum confidence floor
     return round(max(0.2, confidence), 2)
 
-def analyze_trend(metric: str, years: list[int]) -> dict:
+def analyze_trend(metric: str, years: list[int], company) -> dict:
     """
     Analyze multi-year trend for a metric.
     Returns values + trend direction.
@@ -303,7 +358,7 @@ def analyze_trend(metric: str, years: list[int]) -> dict:
     values = []
 
     for year in years:
-        val = query_financial_fact(metric, year)
+        val = query_financial_fact(metric, year, company)
         if val is not None:
             values.append((year, val))
 
@@ -497,19 +552,9 @@ def print_confidence_trends():
 
 if __name__ == "__main__":
     mock_samples = [
-        {"question": "What is revenue for 2023?", "metric": "revenue"},
-        {"question": "What is the median revenue for 2023?", "metric": "revenue"},
-        {"question": "What is the average net income for 2023?", "metric": "net_income"},
-        {"question": "What is the operating margin trend?", "metric": "operating_margin"},
-        {"question": "What is EBITDA for 2023?", "metric": "ebitda"},
-        {"question": "What is return on assets for 2023?", "metric": "return_on_assets"},
-        {"question": "What is debt to equity for 2023?", "metric": "debt_to_equity"},
-        {"question": "What is current ratio for 2023?", "metric": "current_ratio"},
-        {"question": "What is the revenue trend?", "metric": "revenue"},
-        {"question": "How has net income changed over time?", "metric": "net_income"},
-        {"question": "What is the EBITDA margin trend?", "metric": "ebitda"},
-        {"question": "What is ACME Corp revenue for 2023?", "metric": "revenue"},
-        {"question": "What is the average ACME Corp net income for 2023?", "metric": "net_income"},
+        {"question": "What is the ACME EBITDA margin for 2023?", "metric": "ebitda"},
+        {"question": "Compare ACME Corp and ACME Corp EBITDA margin for 2023", "metric": "ebitda"},
+        {"question": "What is ACME Corp return on assets for 2023?", "metric": "return_on_assets"},
         {"question": "What is the ACME Corp revenue trend?", "metric": "revenue"},
         {"question": "What is the median ACME Corp revenue for 2023?", "metric": "revenue"},
         {"question": "Compare ACME Corp and ACME Corp revenue for 2023", "metric": "revenue"},

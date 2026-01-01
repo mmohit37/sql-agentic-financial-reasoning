@@ -45,10 +45,20 @@ def get_confidence_history():
     conn.close()
     return rows
 
-def get_available_years():
+def get_available_years(company=None):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("SELECT DISTINCT year FROM financial_facts ORDER BY year")
+
+    if company is None:
+        cur.execute(
+            "SELECT DISTINCT year FROM financial_facts ORDER BY year"
+        )
+    else:
+        cur.execute(
+            "SELECT DISTINCT year FROM financial_facts WHERE company = ? ORDER BY year",
+            (company,)
+        )
+
     rows = cur.fetchall()
     conn.close()
     return [row[0] for row in rows]
