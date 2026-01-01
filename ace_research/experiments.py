@@ -80,6 +80,10 @@ class Generator:
 
         available_companies = get_available_companies()
         companies = infer_companies(q, available_companies)
+
+        # Fallback
+        if not companies:
+            companies = ["ACME Corp"]
         
         available_metrics = get_available_metrics()
 
@@ -151,6 +155,8 @@ class Generator:
         else:
             agg = None
         
+        results = {}
+        
         if requested_agg and requested_agg not in available_aggs:
             return {
                 "reasoning": reasoning + f" → aggregation '{requested_agg}' not supported by schema",
@@ -161,11 +167,17 @@ class Generator:
                 "missing_components": True
             }
         
-        if agg:
-            value = query_aggregate(metric, agg, year)
-        else:
-            value = query_financial_fact(metric, year, company=companies[0])
-            reasoning += f" → querying SQL for ({metric}, {year}, {companies[0]})"
+        for company in companies:
+            if agg:
+                value = query_aggregate(metric, agg, year, company)
+                reasoning += f" → querying SQL for ({agg}({metric}), {year}, {company})"
+            else:
+                value = query_financial_fact(metric, year, company)
+                reasoning += f" → querying SQL for ({metric}, {year}, {company})"
+            
+            results[company] = value
+        
+        value = results[companies[0]]
 
         return {
             "reasoning": reasoning,
@@ -483,7 +495,11 @@ if __name__ == "__main__":
         {"question": "What is current ratio for 2023?", "metric": "current_ratio"},
         {"question": "What is the revenue trend?", "metric": "revenue"},
         {"question": "How has net income changed over time?", "metric": "net_income"},
-        {"question": "What is the EBITDA margin trend?", "metric": "ebitda"}
+        {"question": "What is the EBITDA margin trend?", "metric": "ebitda"},
+        {"question": "What is ACME Corp revenue for 2023?", "metric": "revenue"},
+        {"question": "What is the average ACME Corp net income for 2023?", "metric": "net_income"},
+        {"question": "What is the ACME Corp revenue trend?", "metric": "revenue"},
+        {"question": "What is the median ACME Corp revenue for 2023?", "metric": "revenue"}
     ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
