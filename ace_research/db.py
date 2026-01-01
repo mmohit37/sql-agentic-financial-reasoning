@@ -64,6 +64,22 @@ def get_available_metrics():
 def get_available_aggregations():
     return ["SUM", "AVG", "MIN", "MAX", "COUNT"]
 
+def get_available_companies():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT DISTINCT company
+        FROM financial_facts
+        WHERE company IS NOT NULL
+        ORDER BY company
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [row[0] for row in rows]
+
 def query_metric_over_years(metric: str, company: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()

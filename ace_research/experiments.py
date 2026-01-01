@@ -9,7 +9,7 @@ from typing import List, Dict
 import sqlite3
 import re
 from collections import defaultdict
-from db import get_available_aggregations, get_available_metrics, get_confidence_history, get_available_years
+from db import get_available_aggregations, get_available_metrics, get_confidence_history, get_available_years, get_available_companies
 from db import query_financial_fact, query_aggregate
 
 derived_metrics = {
@@ -77,6 +77,9 @@ class Generator:
         years = re.findall(r"(20\d{2})", q)
         year = int(years[0]) if years else 2023
         reasoning += f" → inferred year={year}"
+
+        available_companies = get_available_companies()
+        companies = infer_companies(q, available_companies)
         
         available_metrics = get_available_metrics()
 
@@ -161,8 +164,8 @@ class Generator:
         if agg:
             value = query_aggregate(metric, agg, year)
         else:
-            value = query_financial_fact(metric, year, company="ACME Corp")
-            reasoning += f" → querying SQL for ({metric}, {year})"
+            value = query_financial_fact(metric, year, company=companies[0])
+            reasoning += f" → querying SQL for ({metric}, {year}, {companies[0]})"
 
         return {
             "reasoning": reasoning,
@@ -303,6 +306,15 @@ def analyze_trend(metric: str, years: list[int]) -> dict:
 def get_db_connection():
     return sqlite3.connect("../sql_course/agent.db")
 
+def infer_companies(question: str, available_companies: list[str]) -> list[str]:
+    q = question.lower()
+    found = []
+
+    for company in available_companies:
+        if company.lower() in q:
+            found.append(company)
+
+    return found
 
 def get_ground_truth(metric: str, year: int = 2023) -> str:
     conn = get_db_connection()
