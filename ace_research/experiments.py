@@ -62,11 +62,62 @@ class Generator:
     """Produces reasoning and answers using a playbook."""
     def __init__(self, playbook: List[str]):
         self.playbook = playbook
+    
+    def build_reasoning_plan(self, question: str) -> Dict:
+        q = question.lower()
+
+        companies = infer_companies(q, get_available_companies())
+        if not companies:
+            companies = ["ACME Corp"]
+
+        years = re.findall(r"(20\d{2})", q)
+        year = int(years[0]) if years else None
+
+        comparison_keywords = ["vs", "versus", "compare", "comparison", "and"]
+        is_comparison = any(k in q for k in comparison_keywords) and len(companies) > 1
+        is_trend = any(word in q for word in trend_keywords["trend"])
+
+        metric = None
+        for m in get_available_metrics():
+            if m.replace("_", " ") in q:
+                metric = m
+                break
+
+        is_derived = metric in derived_metrics if metric else False
+
+        if is_trend:
+            intent = "trend"
+        elif is_comparison:
+            intent = "comparison"
+        elif is_derived:
+            intent = "derived_metric"
+        else:
+            intent = "base_metric"
+
+        base_metrics = (
+            derived_metrics[metric]["components"]
+            if is_derived and metric in derived_metrics
+            else []
+        )
+
+        return {
+            "intent": intent,
+            "metric": metric,
+            "base_metrics": base_metrics,
+            "companies": companies,
+            "year": year,
+            "is_trend": is_trend,
+            "is_comparison": is_comparison,
+            "is_derived": is_derived
+        }
 
     def generate(self, question: str) -> Dict:
         reasoning = f"Interpreting the question: {question}"
         
         q = question.lower()
+
+        plan = self.build_reasoning_plan(question)
+        reasoning += f" → plan={plan['intent']}"
 
         available_companies = get_available_companies()
         companies = infer_companies(q, available_companies)
@@ -510,12 +561,26 @@ def compare_canonical_fact(metric: str, year: int, companies: list[str]) -> dict
     }
 
 def format_answer_with_confidence(answer, confidence):
-    if confidence >= 0.85:
+    return {
+        "answer": answer,
+        "confidence": round(confidence, 2),
+        "confidence_label": (
+            "high" if confidence >= 0.8
+            else "medium" if confidence >= 0.5
+            else "low"
+        )
+    }
+
+def verbalize_answer(answer_dict):
+    label = answer_dict["confidence_label"]
+    answer = answer_dict["answer"]
+
+    if label == "high":
         return f"{answer}"
-    elif confidence >= 0.6:
-        return f"{answer} (moderate confidence)"
+    elif label == "medium":
+        return f"It appears that {answer}"
     else:
-        return f"{answer} (low confidence — may be incomplete)"
+        return f"I'm not fully confident, but the best estimate is {answer}"
 
 # ----------------------------
 # ACE Simulation
@@ -547,10 +612,17 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
             missing_components=prediction["missing_components"]
         )
 
+        spoken_answer = format_answer_with_confidence(
+            answer = prediction["final_answer"],
+            confidence=confidence
+        )
+
+        serialized_answer = json.dumps(spoken_answer)
+
         # Store unknown metric for learning instead of stopping with ValueError
         if gt is None and not is_derived:
-            store_prediction(question, None, confidence)
-            store_feedback(None, None, 0)
+            prediction_id = store_prediction(question, serialized_answer, confidence)
+            store_feedback(prediction_id, None, 0)
 
             insight = f"Metric '{sample['metric']}' requires derivation or is unsupported"
 
@@ -564,7 +636,7 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
             continue
 
         if is_derived:
-            prediction_id = store_prediction(question, prediction["final_answer"], confidence)
+            prediction_id = store_prediction(question, serialized_answer, confidence)
             store_feedback(prediction_id, None, 1)  # mark as successful execution
             continue
         
@@ -575,7 +647,7 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
         playbook = curator.curate(playbook, reflection)
         generator.playbook = playbook
 
-        prediction_id = store_prediction(question, prediction["final_answer"], confidence)
+        prediction_id = store_prediction(question, serialized_answer, confidence)
         store_feedback(prediction_id, gt, int(reflection["correct"]))
 
         if not reflection["correct"]:
