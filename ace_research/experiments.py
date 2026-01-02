@@ -146,6 +146,18 @@ class Generator:
                 trend_result = analyze_trend(metric, years, company=company)
                 trend_results[company] = trend_result
 
+            if is_comparison and not agg and not is_derived:
+                comparison = compare_canonical_fact(metric, year, companies)
+
+                return {
+                    "reasoning": reasoning + f" → compared {metric} across {companies}",
+                    "final_answer": comparison,
+                    "used_aggregation": False,
+                    "is_derived": False,
+                    "is_comparison": True,
+                    "missing_components": comparison["winner"] is None
+                }
+
             if is_comparison:
                 return {
                     "reasoning": reasoning + f" → analyzed trend per company",
@@ -238,6 +250,10 @@ class Generator:
         }
     
     def compute_derived_metric(self, name, spec, q, reasoning, companies, year, is_comparison):
+
+        def get_component_value(component: str, year: int, company: str):
+            return get_canonical_financial_fact(component, year, company)
+
         formula = spec["formula"]
 
         # Extract components
@@ -253,11 +269,16 @@ class Generator:
             values = {}
 
             for component in components:
-                val = get_canonical_financial_fact(component, year, company)
+                val = get_component_value(component, year, company)
                 if val is None:
-                    reasoning += f" → missing {component} for {company}"
-                    values = None
-                    break
+                    reasoning += f" → missing canonical component {component} for {company}"
+                    return {
+                        "reasoning": reasoning,
+                        "final_answer": None,
+                        "used_aggregation": False,
+                        "is_derived": True,
+                        "missing_components": True
+                    }
                 values[component] = val
                 reasoning += f" → fetched {component}={val} for {company}"
 
@@ -289,7 +310,11 @@ class Generator:
             missing_components = any(missing.values())
         else:
             company = companies[0]
-            final_answer = str(results[company])
+            final_answer = (
+                round(results[company], 4)
+                if results[company] is not None
+                else None
+            )
             missing_components = missing[company]
 
         return {
@@ -457,6 +482,41 @@ def summarize_confidence_trends(rows):
         if min(vals) < 0.5:
             print("⚠️ Unstable metric detected:", metric)
 
+def compare_canonical_fact(metric: str, year: int, companies: list[str]) -> dict:
+    """
+    Compare a canonical metric across multiple companies.
+    Returns values + winner.
+    """
+    results = {}
+
+    for company in companies:
+        val = get_canonical_financial_fact(metric, year, company)
+        if val is not None:
+            results[company] = val
+
+    if len(results) < 2:
+        return {
+            "values": results,
+            "winner": None,
+            "status": "insufficient data"
+        }
+
+    winner = max(results, key=results.get)
+
+    return {
+        "values": results,
+        "winner": winner,
+        "status": "ok"
+    }
+
+def format_answer_with_confidence(answer, confidence):
+    if confidence >= 0.85:
+        return f"{answer}"
+    elif confidence >= 0.6:
+        return f"{answer} (moderate confidence)"
+    else:
+        return f"{answer} (low confidence — may be incomplete)"
+
 # ----------------------------
 # ACE Simulation
 # ----------------------------
@@ -552,16 +612,24 @@ def print_confidence_trends():
 
 if __name__ == "__main__":
     mock_samples = [
-        {"question": "What is the Microsoft's revenue for 2021?", "metric": "revenue"},
-        {"question": "What is Microsoft net income for 2021?", "metric": "net_income"},
-        {"question": "What is Microsoft operating income for 2021?", "metric": "operating_income"},
-        {"question": "What is Microsoft operating margin for 2023?", "metric": "operating_margin"},
-        {"question": "What is Microsoft EBITDA margin for 2015?", "metric": "revenue"},
-        {"question": "What is Microsoft net margin for 2022?", "metric": "net_margin"},
-        {"question": "Compare Microsoft and ACME net income for 2022", "metric": "net_income"},
-        {"question": "What is Microsoft's revenue trend", "metric": "revenue"},
-        {"question": "How has Microsoft's net income changed over time", "metric": "net_income"}
-    ]
+    # --- Canonical single-year facts ---
+    {"question": "What is Microsoft net income for 2021?", "metric": "net_income"},
+    {"question": "What is Microsoft revenue for 2022?", "metric": "revenue"},
+    {"question": "What is Microsoft operating income for 2023?", "metric": "operating_income"},
+
+    # --- Derived single-year metrics ---
+    {"question": "What is Microsoft operating margin for 2023?", "metric": "operating_margin"},
+    {"question": "What is Microsoft net margin for 2022?", "metric": "net_margin"},
+    {"question": "What is Microsoft EBITDA margin for 2015?", "metric": "ebitda_margin"},
+
+    # --- Trend questions (canonical) ---
+    {"question": "What is Microsoft revenue trend?", "metric": "revenue"},
+    {"question": "How has Microsoft net income changed over time?", "metric": "net_income"},
+
+    # --- Trend questions (derived) ---
+    {"question": "What is Microsoft operating margin trend?", "metric": "operating_margin"},
+    {"question": "How has Microsoft net margin changed over time?", "metric": "net_margin"},
+]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
     print_confidence_trends()
