@@ -9,6 +9,7 @@ from typing import List, Dict
 import sqlite3
 import re
 from collections import defaultdict
+from generator import format_comparison_answer
 from db import get_available_aggregations, get_available_metrics, get_confidence_history, get_available_years, get_available_companies
 from db import query_aggregate, get_canonical_financial_fact
 
@@ -197,7 +198,7 @@ class Generator:
                 trend_result = analyze_trend(metric, years, company=company)
                 trend_results[company] = trend_result
 
-            if is_comparison and not agg and not is_derived:
+            if is_comparison and not agg:
                 comparison = compare_canonical_fact(metric, year, companies)
 
                 return {
@@ -281,20 +282,25 @@ class Generator:
             results[company] = value
         
         if is_comparison:
-            value = results
+            final_answer = format_comparison_answer(
+                metric = metric,
+                year = year,
+                results = results,
+            )
+
         else:
-            value = results[companies[0]]
+            final_answer = results[companies[0]]
 
         return {
             "reasoning": reasoning,
             "used_bullets": list(range(min(3, len(self.playbook)))),
-            "final_answer": str(value),
+            "final_answer": final_answer,
             "used_aggregation": agg is not None,
             "is_derived": False,
             "missing_components": (
-                any(v is None for v in value.values())
-                if is_comparison
-                else value is None
+                    any(v is None for v in results.values())
+                    if is_comparison
+                    else final_answer is None
             ),
             "is_comparison": is_comparison,
             "companies": companies
@@ -533,31 +539,30 @@ def summarize_confidence_trends(rows):
         if min(vals) < 0.5:
             print("⚠️ Unstable metric detected:", metric)
 
-def compare_canonical_fact(metric: str, year: int, companies: list[str]) -> dict:
-    """
-    Compare a canonical metric across multiple companies.
-    Returns values + winner.
-    """
-    results = {}
+def compare_canonical_fact(metric: str, year: int, companies: list[str]):
+    values = {}
 
     for company in companies:
         val = get_canonical_financial_fact(metric, year, company)
         if val is not None:
-            results[company] = val
+            values[company] = val
 
-    if len(results) < 2:
+    if len(values) < 2:
         return {
-            "values": results,
+            "values": values,
             "winner": None,
-            "status": "insufficient data"
+            "reason": "insufficient data"
         }
 
-    winner = max(results, key=results.get)
+    sorted_vals = sorted(values.items(), key=lambda x: x[1], reverse=True)
+    winner, winner_val = sorted_vals[0]
+    runner_up, runner_val = sorted_vals[1]
 
     return {
-        "values": results,
+        "values": values,
         "winner": winner,
-        "status": "ok"
+        "delta": winner_val - runner_val,
+        "ratio": winner_val / runner_val if runner_val != 0 else None
     }
 
 def format_answer_with_confidence(answer, confidence):
@@ -747,23 +752,18 @@ def print_confidence_trends():
 
 if __name__ == "__main__":
     mock_samples = [
-    # --- Canonical single-year facts ---
-    {"question": "What is Microsoft net income for 2021?", "metric": "net_income"},
-    {"question": "What is Microsoft revenue for 2022?", "metric": "revenue"},
-    {"question": "What is Microsoft operating income for 2023?", "metric": "operating_income"},
-
-    # --- Derived single-year metrics ---
-    {"question": "What is Microsoft operating margin for 2023?", "metric": "operating_margin"},
-    {"question": "What is Microsoft net margin for 2022?", "metric": "net_margin"},
-    {"question": "What is Microsoft EBITDA margin for 2015?", "metric": "ebitda_margin"},
-
-    # --- Trend questions (canonical) ---
-    {"question": "What is Microsoft revenue trend?", "metric": "revenue"},
-    {"question": "How has Microsoft net income changed over time?", "metric": "net_income"},
-
-    # --- Trend questions (derived) ---
-    {"question": "What is Microsoft operating margin trend?", "metric": "operating_margin"},
-    {"question": "How has Microsoft net margin changed over time?", "metric": "net_margin"},
+    {
+        "question": "Compare Microsoft and Google revenue for 2022",
+        "metric": "revenue"
+    },
+    {
+        "question": "Microsoft vs Google net income for 2023",
+        "metric": "net_income"
+    },
+    {
+        "question": "Which company had higher operating income in 2021, Microsoft or Google?",
+        "metric": "operating_income"
+    }
 ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
