@@ -582,6 +582,62 @@ def verbalize_answer(answer_dict):
     else:
         return f"I'm not fully confident, but the best estimate is {answer}"
 
+def format_numeric_answer(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        # Use commas + reasonable precision
+        if abs(value) >= 1_000:
+            return f"{value:,.0f}"
+        else:
+            return round(value, 4)
+
+    return value
+
+def build_explanation(prediction: dict) -> str:
+    """
+    Build a short, human-readable explanation for the answer.
+    """
+    parts = []
+
+    intent = prediction.get("intent")
+    metric = prediction.get("metric")
+    companies = prediction.get("companies", [])
+    year = prediction.get("year")
+
+    if intent == "base_metric":
+        parts.append(
+            f"I retrieved the reported {metric.replace('_', ' ')}"
+            f"{' for ' + companies[0] if companies else ''}"
+            f"{' in ' + str(year) if year else ''}."
+        )
+
+    elif intent == "derived_metric":
+        parts.append(
+            f"I calculated {metric.replace('_', ' ')} using its underlying financial components."
+        )
+
+    elif intent == "trend":
+        parts.append(
+            f"I analyzed how {metric.replace('_', ' ')} changed over time."
+        )
+
+    elif intent == "comparison":
+        parts.append(
+            f"I compared {metric.replace('_', ' ')} across companies."
+        )
+
+    confidence = prediction.get("confidence", 0)
+    if confidence >= 0.8:
+        parts.append("The data supporting this answer is complete and consistent.")
+    elif confidence >= 0.5:
+        parts.append("Some assumptions were required, which introduces moderate uncertainty.")
+    else:
+        parts.append("The available data is incomplete, so this answer is uncertain.")
+
+    return " ".join(parts)
+
 # ----------------------------
 # ACE Simulation
 # ----------------------------
@@ -612,10 +668,17 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
             missing_components=prediction["missing_components"]
         )
 
+        formatted_answer = format_numeric_answer(prediction["final_answer"])
+
         spoken_answer = format_answer_with_confidence(
-            answer = prediction["final_answer"],
+            answer = formatted_answer,
             confidence=confidence
         )
+
+        spoken_answer["explanation"] = build_explanation({
+            **prediction,
+            "confidence": confidence
+        })
 
         serialized_answer = json.dumps(spoken_answer)
 
