@@ -6,6 +6,7 @@ from ace_research.xbrl.mappings import XBRL_METRIC_MAP
 from ace_research.db import insert_financial_fact
 from collections import Counter
 from datetime import timedelta
+from pathlib import Path
 
 
 # ----------------------------
@@ -205,13 +206,100 @@ def ingest_company_xbrl(company: str, cik: str, years: list[int]) -> None:
                     metric=metric,
                     value=value
                 )
-                
+
                 inserted += 1
 
             print(f"Inserted {inserted} facts, skipped {skipped}")
 
         # Only validate one filing for now
         break
+
+def ingest_local_xbrl_file(
+    file_path: str,
+    company: str,
+    years: list[int] | None = None
+) -> None:
+    """
+    Ingest a locally uploaded XBRL / iXBRL file.
+    Supports .xml, .xbrl, .htm, .html
+    """
+
+    path = Path(file_path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"XBRL file not found: {file_path}")
+
+    if path.suffix.lower() not in {".xml", ".xbrl", ".htm", ".html"}:
+        raise ValueError("Unsupported file type for XBRL ingestion")
+
+    print(f"\nIngesting local XBRL file:")
+    print(f"  File: {path}")
+    print(f"  Company: {company}")
+
+    cntlr = Cntlr.Cntlr(logFileName=None)
+    model_xbrl = cntlr.modelManager.load(str(path))
+
+    if model_xbrl is None:
+        print("Arelle failed to load XBRL.")
+        return
+
+    print(f"Arelle loaded XBRL")
+    print(f"   Facts detected: {len(model_xbrl.facts)}")
+
+    inserted = 0
+    skipped = 0
+
+    for fact in model_xbrl.facts:
+        try:
+            if fact.isNil:
+                skipped += 1
+                continue
+
+            concept = fact.qname.localName
+            if concept not in XBRL_METRIC_MAP:
+                skipped += 1
+                continue
+
+            metric = XBRL_METRIC_MAP[concept]
+
+            try:
+                value = float(fact.value)
+            except (TypeError, ValueError):
+                skipped += 1
+                continue
+
+            ctx = model_xbrl.contexts.get(fact.contextID)
+            if ctx is None:
+                skipped += 1
+                continue
+
+            # Determine year
+            if ctx.endDatetime:
+                year = ctx.endDatetime.year
+            elif ctx.instantDatetime:
+                year = ctx.instantDatetime.year
+            else:
+                skipped += 1
+                continue
+
+            if years and year not in years:
+                skipped += 1
+                continue
+
+            insert_financial_fact(
+                company=company,
+                year=year,
+                metric=metric,
+                value=value
+            )
+
+            inserted += 1
+
+        except Exception:
+            skipped += 1
+            continue
+
+    print(f"Inserted {inserted} facts, skipped {skipped}")
 
 
 def is_full_year_context(ctx) -> bool:
