@@ -1,5 +1,6 @@
 data/
 __pycache__/
 *.db
+agent.db
 /data/sec/*
 /sec-edgar-filings/*
