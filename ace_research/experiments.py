@@ -45,6 +45,26 @@ derived_metrics = {
     "ebitda_margin": {
         "formula": "ebitda / revenue",
         "components": ["ebitda", "revenue"]
+    },
+    "asset_turnover": {
+        "formula": "revenue / total_assets",
+        "components": ["revenue", "total_assets"]
+    },
+    "debt_ratio": {
+        "formula": "total_liabilities / total_assets",
+        "components": ["total_liabilities", "total_assets"]
+    },
+    "equity_ratio": {
+        "formula": "total_equity / total_assets",
+        "components": ["total_equity", "total_assets"]
+    },
+    "equity_multiplier": {
+        "formula": "total_assets / total_equity",
+        "components": ["total_assets", "total_equity"]
+    },
+    "return_on_invested_capital": {
+        "formula": "net_income / (total_equity + total_liabilities)",
+        "components": ["net_income", "total_equity", "total_liabilities"]
     }
 }
 
@@ -132,7 +152,9 @@ class Generator:
         reasoning += f" → inferred year={year}"
         
         comparison_keywords = ["vs", "versus", "compare", "comparison", "and"]
-        is_comparison = any(k in q for k in comparison_keywords) and len(companies) > 1
+        is_comparison = any(k in q for k in comparison_keywords) and len(companies) > 1\
+
+        agg = None
 
         # Identify complex metric
         for derived, spec in derived_metrics.items():
@@ -752,17 +774,146 @@ def print_confidence_trends():
 
 if __name__ == "__main__":
     mock_samples = [
+    # Trend questions (often mixed or insufficient data)
     {
-        "question": "Compare Microsoft and Google revenue for 2022",
+        "question": "What is the trend of Microsoft's revenue?",
         "metric": "revenue"
     },
     {
-        "question": "Microsoft vs Google net income for 2023",
+        "question": "How has Google's net income changed over time?",
         "metric": "net_income"
     },
     {
-        "question": "Which company had higher operating income in 2021, Microsoft or Google?",
+        "question": "Is Microsoft's operating income increasing or decreasing?",
         "metric": "operating_income"
+    },
+    {
+        "question": "What is the trend of Google's gross margin?",
+        "metric": "gross_margin"
+    },
+    {
+        "question": "How has Microsoft's return on equity changed over time?",
+        "metric": "return_on_equity"
+    },
+    {
+        "question": "Is Google's asset turnover increasing or decreasing?",
+        "metric": "asset_turnover"
+    },
+    {
+        "question": "What is the trend of Microsoft's current ratio?",
+        "metric": "current_ratio"
+    },
+
+    # Ambiguous / underspecified year
+    {
+        "question": "What is Microsoft's revenue?",
+        "metric": "revenue"
+    },
+    {
+        "question": "What is Google's net income?",
+        "metric": "net_income"
+    },
+
+    # Years outside ingested coverage
+    {
+        "question": "What was Microsoft's revenue in 2018?",
+        "metric": "revenue"
+    },
+    {
+        "question": "What was Google's operating income in 2019?",
+        "metric": "operating_income"
+    },
+
+    # Derived metrics with partial or missing components
+    {
+        "question": "What is Microsoft's EBITDA margin for 2016?",
+        "metric": "ebitda_margin"
+    },
+    {
+        "question": "What is Google's net margin for 2015?",
+        "metric": "net_margin"
+    },
+    {
+        "question": "What is Microsoft's operating margin for 2023?",
+        "metric": "operating_margin"
+    },
+    {
+        "question": "What is Google's gross margin?",
+        "metric": "gross_margin"
+    },
+    {
+        "question": "What is Microsoft's return on assets for 2022?",
+        "metric": "return_on_assets"
+    },
+    {
+        "question": "What is Google's return on equity?",
+        "metric": "return_on_equity"
+    },
+    {
+        "question": "What is Microsoft's debt to equity ratio for 2023?",
+        "metric": "debt_to_equity"
+    },
+    {
+        "question": "What is Google's current ratio?",
+        "metric": "current_ratio"
+    },
+    {
+        "question": "What is Microsoft's asset turnover for 2022?",
+        "metric": "asset_turnover"
+    },
+    {
+        "question": "What is Google's debt ratio?",
+        "metric": "debt_ratio"
+    },
+    {
+        "question": "What is Microsoft's equity ratio for 2023?",
+        "metric": "equity_ratio"
+    },
+    {
+        "question": "What is Google's equity multiplier?",
+        "metric": "equity_multiplier"
+    },
+    {
+        "question": "What is Microsoft's return on invested capital for 2022?",
+        "metric": "return_on_invested_capital"
+    },
+
+    # Comparison with weak overlap
+    {
+        "question": "Compare Microsoft and Google revenue trends",
+        "metric": "revenue"
+    },
+    {
+        "question": "Which company had better profitability over time, Microsoft or Google?",
+        "metric": "net_income"
+    },
+    {
+        "question": "Compare Microsoft and Google operating margins",
+        "metric": "operating_margin"
+    },
+    {
+        "question": "Which company has a better return on assets, Microsoft or Google?",
+        "metric": "return_on_assets"
+    },
+    {
+        "question": "Compare the debt to equity ratios of Microsoft and Google",
+        "metric": "debt_to_equity"
+    },
+
+    # Vague aggregation intent (unsupported or unclear)
+    {
+        "question": "What is the average revenue of Microsoft?",
+        "metric": "revenue"
+    },
+    {
+        "question": "What is the median net income of Google?",
+        "metric": "net_income"
+    },
+
+    # Balance sheet items that may be missing or inconsistent
+    {
+        "question": "What are Microsoft's total assets for 2022?",
+        "metric": "total_assets"
     }
 ]
     initial_playbook = ["Always read financial note disclosures carefully."]
