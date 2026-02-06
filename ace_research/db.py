@@ -228,6 +228,125 @@ def insert_raw_xbrl_fact(
     conn.commit()
     conn.close()
 
+# ----------------------------
+# Year-over-Year Helpers (Reuse Existing Functions)
+# ----------------------------
+
+def get_metric_previous_year(metric: str, year: int, company: str):
+    """
+    Get metric value for the previous year (year - 1).
+
+    This is a thin wrapper around get_canonical_financial_fact().
+    Returns None if prior year data is unavailable.
+    """
+    prior_year = year - 1
+    return get_canonical_financial_fact(metric, prior_year, company)
+
+
+def get_metric_delta(metric: str, year: int, company: str):
+    """
+    Compute year-over-year delta: value(t) - value(t-1).
+
+    Composes get_canonical_financial_fact() for both years.
+    Returns None if either year is missing.
+    """
+    current = get_canonical_financial_fact(metric, year, company)
+    prior = get_metric_previous_year(metric, year, company)
+
+    if current is None or prior is None:
+        return None
+
+    return current - prior
+
+
+def get_metric_ratio(numerator_metric: str, denominator_metric: str, year: int, company: str):
+    """
+    Compute ratio: numerator / denominator.
+
+    Composes get_canonical_financial_fact() for both components.
+    Returns None if either component is missing or denominator is zero.
+
+    Examples:
+        - ROA: get_metric_ratio("net_income", "total_assets", 2023, "Microsoft")
+        - Current ratio: get_metric_ratio("current_assets", "current_liabilities", 2023, "Microsoft")
+    """
+    numerator = get_canonical_financial_fact(numerator_metric, year, company)
+    denominator = get_canonical_financial_fact(denominator_metric, year, company)
+
+    if numerator is None or denominator is None:
+        return None
+
+    if denominator == 0:
+        return None
+
+    return numerator / denominator
+
+
+# ----------------------------
+# Derived Metrics Storage
+# ----------------------------
+
+def insert_derived_metric(
+    company: str,
+    year: int,
+    metric: str,
+    value: float,
+    metric_type: str,
+    input_components: str
+):
+    """
+    Insert a derived metric with explicit provenance.
+
+    Args:
+        company: Company name
+        year: Fiscal year
+        metric: Derived metric name (e.g., "roa", "revenue_delta")
+        value: Computed value (or None if computation failed)
+        metric_type: One of "ratio", "delta", "single_year"
+        input_components: JSON string documenting which canonical metrics were used
+
+    This function does NOT compute metrics - it only stores pre-computed values.
+    Computation should happen explicitly in calling code using get_metric_ratio(), etc.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR REPLACE INTO derived_metrics (
+            company,
+            year,
+            metric,
+            value,
+            metric_type,
+            input_components
+        ) VALUES (?, ?, ?, ?, ?, ?)
+    """, (company, year, metric, value, metric_type, input_components))
+
+    conn.commit()
+    conn.close()
+
+
+def get_derived_metric(metric: str, year: int, company: str):
+    """
+    Retrieve a previously computed derived metric.
+
+    Returns None if not found or if computation failed (value IS NULL).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT value
+        FROM derived_metrics
+        WHERE metric = ? AND year = ? AND company = ?
+    """, (metric, year, company))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    return row[0] if row else None
+
+
 if __name__ == "__main__":
     print(query_financial_fact("revenue", 2023))
     print(query_aggregate("revenue", "SUM", 2023))
