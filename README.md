@@ -20,65 +20,68 @@ The system is fully backend-driven and designed to be extensible for additional 
 
 ---
 
-## Architecture Overview
+SEC EDGAR (iXBRL)
+10-K Filings
+        |
+        v
++-------------------------+
+|  XBRL Ingestion Layer   |
+|-------------------------|
+| - Download filings      |
+| - Parse via Arelle      |
+| - Extract raw facts     |
+| - Filter full-year data |
++-------------------------+
+        |
+        v
++------------------------------+
+|  Canonical Normalization     |
+|------------------------------|
+| - Map XBRL concepts          |
+| - Deduplicate facts          |
+| - Select canonical values   |
+| - Store by year/company     |
++------------------------------+
+        |
+        v
++------------------------------+
+|  SQLite Fact Store           |
+|------------------------------|
+| - financial_facts            |
+| - agent_predictions          |
+| - agent_feedback             |
+| - agent_playbook             |
++------------------------------+
+        |
+        v
++------------------------------+
+|  Reasoning Engine            |
+|------------------------------|
+| - Metric inference           |
+| - Trend analysis             |
+| - Company comparison         |
+| - Derived metrics            |
++------------------------------+
+        |
+        v
++------------------------------+
+|  Confidence & Explanation    |
+|------------------------------|
+| - Confidence scoring         |
+| - Explanation generation    |
+| - Uncertainty handling      |
++------------------------------+
+        |
+        v
++------------------------------+
+|  Agent Output                |
+|------------------------------|
+| - Structured answer          |
+| - Confidence label           |
+| - Explanation text           |
+| - Stored feedback loop       |
++------------------------------+
 
-┌────────────────────┐
-│  SEC EDGAR (iXBRL) │
-│   10-K Filings     │
-└─────────┬──────────┘
-          │
-          ▼
-┌──────────────────────────┐
-│ XBRL Ingestion Layer     │
-│ - Download filings       │
-│ - Parse via Arelle       │
-│ - Extract raw facts      │
-│ - Filter full-year data  │
-└─────────┬────────────────┘
-          │
-          ▼
-┌──────────────────────────┐
-│ Canonical Normalization  │
-│ - Map XBRL concepts      │
-│ - Deduplicate facts      │
-│ - Select canonical value │
-│ - Store by year/company  │
-└─────────┬────────────────┘
-          │
-          ▼
-┌──────────────────────────┐
-│ SQLite Fact Store        │
-│ - financial_facts        │
-│ - agent_predictions      │
-│ - agent_feedback         │
-│ - agent_playbook         │
-└─────────┬────────────────┘
-          │
-          ▼
-┌──────────────────────────┐
-│ Reasoning Engine         │
-│ - Metric inference       │
-│ - Trend analysis         │
-│ - Company comparison     │
-│ - Derived metrics        │
-└─────────┬────────────────┘
-          │
-          ▼
-┌──────────────────────────┐
-│ Confidence & Explanation │
-│ - Confidence scoring     │
-│ - Explanation generation │
-│ - Uncertainty handling   │
-└─────────┬────────────────┘
-          │
-          ▼
-┌──────────────────────────┐
-│ Agent Output             │
-│ - Structured answer      │
-│ - Confidence label       │
-│ - Explanation text       │
-│ - Stored feedback loop   │
-└──────────────────────────┘
 
 
 ## Supported Question Types
