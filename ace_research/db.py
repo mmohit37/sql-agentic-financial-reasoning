@@ -158,6 +158,76 @@ def insert_financial_fact(company: str, year: int, metric: str, value: float):
     conn.commit()
     conn.close()
 
+def insert_raw_xbrl_fact(
+    concept_qname: str,
+    concept_local_name: str,
+    concept_namespace: str,
+    numeric_value: float,
+    unit: str,
+    period_type: str,
+    start_date: str,
+    end_date: str,
+    fiscal_year: int,
+    context_id: str,
+    context_hash: str,
+    dimensions: str,
+    is_consolidated: bool,
+    company: str,
+    filing_source: str
+):
+    """
+    Insert a raw XBRL fact before canonical reduction.
+
+    This preserves ALL numeric facts from filings, including:
+    - All concept variants
+    - All dimensional slices
+    - All period types
+    - All contexts
+
+    Canonical reduction happens downstream in financial_facts table.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT OR IGNORE INTO raw_xbrl_facts (
+            concept_qname,
+            concept_local_name,
+            concept_namespace,
+            numeric_value,
+            unit,
+            period_type,
+            start_date,
+            end_date,
+            fiscal_year,
+            context_id,
+            context_hash,
+            dimensions,
+            is_consolidated,
+            company,
+            filing_source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        concept_qname,
+        concept_local_name,
+        concept_namespace,
+        numeric_value,
+        unit,
+        period_type,
+        start_date,
+        end_date,
+        fiscal_year,
+        context_id,
+        context_hash,
+        dimensions,
+        1 if is_consolidated else 0,
+        company,
+        filing_source
+    ))
+
+    conn.commit()
+    conn.close()
+
 if __name__ == "__main__":
     print(query_financial_fact("revenue", 2023))
     print(query_aggregate("revenue", "SUM", 2023))

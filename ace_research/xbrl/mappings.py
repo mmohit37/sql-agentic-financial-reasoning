@@ -22,5 +22,5 @@ XBRL_METRIC_MAP = {
     # Cash & equivalents (optional but useful)
     "CashAndCashEquivalentsAtCarryingValue": "cash_and_equivalents",
     "ShortTermInvestments": "short_term_investments",
-    "LongTermInvestments": "long_term_investments",
+    "LongTermInvestments": "long_term_investments"
 }
