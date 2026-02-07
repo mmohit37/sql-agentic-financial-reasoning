@@ -22,5 +22,23 @@ XBRL_METRIC_MAP = {
     # Cash & equivalents (optional but useful)
     "CashAndCashEquivalentsAtCarryingValue": "cash_and_equivalents",
     "ShortTermInvestments": "short_term_investments",
-    "LongTermInvestments": "long_term_investments"
+    "LongTermInvestments": "long_term_investments",
+
+    # --- Piotroski F-Score inputs ---
+
+    # Cash flow from operations
+    "NetCashProvidedByUsedInOperatingActivities": "operating_cash_flow",
+
+    # Debt
+    "LongTermDebt": "long_term_debt",
+    "LongTermDebtNoncurrent": "long_term_debt",
+
+    # Profitability
+    "GrossProfit": "gross_profit",
+    "CostOfRevenue": "cost_of_revenue",
+    "CostOfGoodsAndServicesSold": "cost_of_revenue",
+
+    # Shares outstanding
+    "CommonStockSharesOutstanding": "shares_outstanding",
+    "EntityCommonStockSharesOutstanding": "shares_outstanding",
 }

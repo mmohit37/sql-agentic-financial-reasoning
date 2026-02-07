@@ -10,7 +10,9 @@
       "Bash(git commit:*)",
       "Bash(sqlite3:*)",
       "Bash(python -m ace_research.xbrl.ingest:*)",
-      "Bash(python -c:*)"
+      "Bash(python -c:*)",
+      "Bash(python -m ace_research.xbrl.backfill:*)",
+      "Bash(python -m ace_research.piotroski:*)"
     ]
   }
 }
