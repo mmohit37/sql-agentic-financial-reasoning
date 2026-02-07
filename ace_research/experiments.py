@@ -11,7 +11,7 @@ import re
 from collections import defaultdict
 from ace_research.generator import format_comparison_answer
 from ace_research.db import get_available_aggregations, get_available_metrics, get_confidence_history, get_available_years, get_available_companies
-from ace_research.db import query_aggregate, get_canonical_financial_fact
+from ace_research.db import query_aggregate, get_canonical_financial_fact, DB_PATH
 
 derived_metrics = {
     "operating_margin": {
@@ -487,7 +487,7 @@ def analyze_trend(metric: str, years: list[int], company) -> dict:
     }
 
 def get_db_connection():
-    return sqlite3.connect("../sql_course/agent.db")
+    return sqlite3.connect(DB_PATH)
 
 def infer_companies(question: str, available_companies: list[str]) -> list[str]:
     q = question.lower()
