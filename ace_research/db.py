@@ -347,6 +347,27 @@ def get_derived_metric(metric: str, year: int, company: str):
     return row[0] if row else None
 
 
+def get_derived_metrics_by_prefix(prefix: str, year: int, company: str):
+    """
+    Retrieve all derived_metrics rows where metric starts with prefix.
+
+    Returns list of (metric, value, input_components) tuples.
+    Useful for batch retrieval of related metrics (e.g., all piotroski_ signals).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT metric, value, input_components
+        FROM derived_metrics
+        WHERE metric LIKE ? AND year = ? AND company = ?
+    """, (prefix + "%", year, company))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
 if __name__ == "__main__":
     print(query_financial_fact("revenue", 2023))
     print(query_aggregate("revenue", "SUM", 2023))

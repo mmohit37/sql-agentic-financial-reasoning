@@ -11,7 +11,8 @@ import re
 from collections import defaultdict
 from ace_research.generator import format_comparison_answer
 from ace_research.db import get_available_aggregations, get_available_metrics, get_confidence_history, get_available_years, get_available_companies
-from ace_research.db import query_aggregate, get_canonical_financial_fact, DB_PATH
+from ace_research.db import query_aggregate, get_canonical_financial_fact, get_derived_metrics_by_prefix
+from ace_research.piotroski import compute_piotroski_score, persist_piotroski_score
 
 derived_metrics = {
     "operating_margin": {
@@ -68,6 +69,8 @@ derived_metrics = {
     }
 }
 
+PIOTROSKI_KEYWORDS = ["piotroski", "f-score", "f score", "fscore", "financial strength score"]
+
 trend_keywords = {
     "trend": ["trend", "over time", "across years"],
     "increase": ["increase", "increasing", "growth", "grew", "rising"],
@@ -105,8 +108,11 @@ class Generator:
                 break
 
         is_derived = metric in derived_metrics if metric else False
+        is_piotroski = any(kw in q for kw in PIOTROSKI_KEYWORDS)
 
-        if is_trend:
+        if is_piotroski:
+            intent = "piotroski"
+        elif is_trend:
             intent = "trend"
         elif is_comparison:
             intent = "comparison"
@@ -123,13 +129,14 @@ class Generator:
 
         return {
             "intent": intent,
-            "metric": metric,
+            "metric": metric if not is_piotroski else "piotroski_f_score",
             "base_metrics": base_metrics,
             "companies": companies,
             "year": year,
             "is_trend": is_trend,
             "is_comparison": is_comparison,
-            "is_derived": is_derived
+            "is_derived": is_derived,
+            "is_piotroski": is_piotroski
         }
 
     def generate(self, question: str) -> Dict:
@@ -152,7 +159,11 @@ class Generator:
         reasoning += f" → inferred year={year}"
         
         comparison_keywords = ["vs", "versus", "compare", "comparison", "and"]
-        is_comparison = any(k in q for k in comparison_keywords) and len(companies) > 1\
+        is_comparison = any(k in q for k in comparison_keywords) and len(companies) > 1
+
+        # Piotroski intent: intercept before derived/base metric routing
+        if plan.get("is_piotroski"):
+            return self.handle_piotroski(companies, year, reasoning)
 
         agg = None
 
@@ -407,6 +418,69 @@ class Generator:
             "companies": companies
         }
 
+    def handle_piotroski(self, companies: list, year: int, reasoning: str) -> Dict:
+        """
+        Handle Piotroski F-Score queries.
+
+        Uses Option C caching: check DB first, compute only if missing.
+        Returns structured response with score, signals, explanation, confidence.
+        """
+        company = companies[0] if companies else None
+        if not company:
+            return {
+                "reasoning": reasoning + " -> no company identified for Piotroski query",
+                "final_answer": None,
+                "used_aggregation": False,
+                "is_derived": False,
+                "is_piotroski": True,
+                "missing_components": True,
+                "companies": [],
+            }
+
+        result = get_piotroski_from_db(company, year)
+
+        confidence = compute_piotroski_confidence(result["max_possible"])
+        confidence_label = (
+            "high" if confidence >= 0.8
+            else "medium" if confidence >= 0.5
+            else "low"
+        )
+        explanation = build_piotroski_explanation(result)
+
+        piotroski_answer = {
+            "company": company,
+            "year": year,
+            "piotroski_score": result["total_score"],
+            "max_score": 9,
+            "signals": {
+                name: sig["score"] for name, sig in result["signals"].items()
+            },
+            "explanation": explanation,
+            "confidence": confidence,
+            "confidence_label": confidence_label,
+        }
+
+        reasoning += (
+            f" -> retrieved Piotroski F-Score for {company} ({year}):"
+            f" {result['total_score']}/{result['max_possible']}"
+        )
+
+        return {
+            "reasoning": reasoning,
+            "used_bullets": list(range(min(3, len(self.playbook)))),
+            "final_answer": piotroski_answer,
+            "used_aggregation": False,
+            "is_derived": False,
+            "is_piotroski": True,
+            "missing_components": result["total_score"] is None,
+            "is_comparison": False,
+            "companies": companies,
+            "intent": "piotroski",
+            "metric": "piotroski_f_score",
+            "year": year,
+            "confidence": confidence,
+        }
+
 class Reflector:
     """Compares prediction vs. ground truth to extract insights."""
     def reflect(self, prediction: Dict, ground_truth: str) -> Dict:
@@ -487,7 +561,8 @@ def analyze_trend(metric: str, years: list[int], company) -> dict:
     }
 
 def get_db_connection():
-    return sqlite3.connect(DB_PATH)
+    import ace_research.db as _db
+    return sqlite3.connect(_db.DB_PATH)
 
 def infer_companies(question: str, available_companies: list[str]) -> list[str]:
     q = question.lower()
@@ -587,6 +662,111 @@ def compare_canonical_fact(metric: str, year: int, companies: list[str]):
         "ratio": winner_val / runner_val if runner_val != 0 else None
     }
 
+def get_piotroski_from_db(company: str, year: int) -> dict:
+    """
+    Retrieve Piotroski F-Score from derived_metrics if cached.
+    If not cached, compute, persist, and return.
+
+    Implements Option C: never recompute if stored values exist.
+    Returns dict identical in shape to compute_piotroski_score().
+    """
+    rows = get_derived_metrics_by_prefix("piotroski_", year, company)
+
+    # Look for the total score row to confirm cache hit
+    total_row = None
+    signal_rows = {}
+    for metric, value, input_components in rows:
+        if metric == "piotroski_f_score":
+            total_row = (value, input_components)
+        else:
+            signal_rows[metric] = (value, input_components)
+
+    if total_row is not None:
+        # Cache hit: reconstruct from stored data
+        total_provenance = json.loads(total_row[1])
+
+        signals = {}
+        for metric, (value, input_components) in signal_rows.items():
+            provenance = json.loads(input_components)
+            signal_name = provenance["signal"]
+            signals[signal_name] = {
+                "signal": signal_name,
+                "score": int(value) if value is not None else None,
+                "value": provenance.get("raw_value"),
+                "inputs": provenance.get("inputs", {}),
+            }
+
+        return {
+            "company": company,
+            "year": year,
+            "total_score": int(total_row[0]) if total_row[0] is not None else None,
+            "max_possible": total_provenance.get("max_possible", 0),
+            "signals": signals,
+        }
+
+    # Cache miss: compute, persist, return
+    return persist_piotroski_score(company, year)
+
+
+def compute_piotroski_confidence(max_possible: int) -> float:
+    """
+    Piotroski-specific confidence based on how many of 9 signals were computable.
+
+    - High (0.95): >= 8 signals computable
+    - Medium (0.7): 5-7 signals computable
+    - Low (0.4): 1-4 signals computable
+    - Floor (0.2): 0 signals computable
+    """
+    if max_possible >= 8:
+        return 0.95
+    elif max_possible >= 5:
+        return 0.7
+    elif max_possible > 0:
+        return 0.4
+    else:
+        return 0.2
+
+
+def build_piotroski_explanation(result: dict) -> str:
+    """
+    Template-based Piotroski explanation. Deterministic, no LLM.
+    Mentions strengths (score=1), weaknesses (score=0), and missing signals.
+    """
+    company = result["company"]
+    year = result["year"]
+    total = result["total_score"]
+    max_possible = result["max_possible"]
+    signals = result["signals"]
+
+    if total is None:
+        return f"Insufficient data to compute Piotroski F-Score for {company} in {year}."
+
+    parts = [
+        f"{company}'s Piotroski F-Score for {year} is {total}"
+        f" out of {max_possible} computable signals (9 total)."
+    ]
+
+    strengths = sorted(name for name, sig in signals.items() if sig["score"] == 1)
+    weaknesses = sorted(name for name, sig in signals.items() if sig["score"] == 0)
+    missing = sorted(name for name, sig in signals.items() if sig["score"] is None)
+
+    if strengths:
+        parts.append("Strengths: " + ", ".join(s.replace("_", " ") for s in strengths) + ".")
+    if weaknesses:
+        parts.append("Weaknesses: " + ", ".join(s.replace("_", " ") for s in weaknesses) + ".")
+    if missing:
+        parts.append("Missing data for: " + ", ".join(s.replace("_", " ") for s in missing) + ".")
+
+    if total >= 7:
+        parts.append("This indicates strong financial health.")
+    elif total >= 4:
+        parts.append("This indicates moderate financial health.")
+    else:
+        parts.append("This indicates weak financial health.")
+
+    return " ".join(parts)
+
+
 def format_answer_with_confidence(answer, confidence):
     return {
         "answer": answer,
@@ -655,6 +835,13 @@ def build_explanation(prediction: dict) -> str:
             f"I compared {metric.replace('_', ' ')} across companies."
         )
 
+    elif intent == "piotroski":
+        parts.append(
+            f"I retrieved the Piotroski F-Score"
+            f"{' for ' + companies[0] if companies else ''}"
+            f"{' in ' + str(year) if year else ''}."
+        )
+
     confidence = prediction.get("confidence", 0)
     if confidence >= 0.8:
         parts.append("The data supporting this answer is complete and consistent.")
@@ -682,18 +869,23 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
         metric = sample["metric"]
         is_derived = metric in derived_metrics
+        is_piotroski = metric == "piotroski_f_score"
         gt = None
-        if not is_derived:
+        if not is_derived and not is_piotroski:
             gt = get_ground_truth(metric, year)
 
         # Step 1: Generate
         prediction = generator.generate(question)
 
-        confidence = compute_confidence(
-            is_derived=prediction["is_derived"],
-            used_aggregation=prediction["used_aggregation"],
-            missing_components=prediction["missing_components"]
-        )
+        # Use Piotroski-specific confidence when applicable
+        if prediction.get("is_piotroski") and "confidence" in prediction:
+            confidence = prediction["confidence"]
+        else:
+            confidence = compute_confidence(
+                is_derived=prediction["is_derived"],
+                used_aggregation=prediction["used_aggregation"],
+                missing_components=prediction["missing_components"]
+            )
 
         formatted_answer = format_numeric_answer(prediction["final_answer"])
 
@@ -708,6 +900,12 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
         })
 
         serialized_answer = json.dumps(spoken_answer)
+
+        # Piotroski: store and continue (no ground truth to compare)
+        if prediction.get("is_piotroski"):
+            prediction_id = store_prediction(question, serialized_answer, confidence)
+            store_feedback(prediction_id, None, 1)
+            continue
 
         # Store unknown metric for learning instead of stopping with ValueError
         if gt is None and not is_derived:
@@ -914,7 +1112,17 @@ if __name__ == "__main__":
     {
         "question": "What are Microsoft's total assets for 2022?",
         "metric": "total_assets"
-    }
+    },
+
+    # Piotroski F-Score queries
+    {
+        "question": "What is Microsoft's Piotroski score in 2023?",
+        "metric": "piotroski_f_score"
+    },
+    {
+        "question": "How strong is Microsoft's F-score?",
+        "metric": "piotroski_f_score"
+    },
 ]
     initial_playbook = ["Always read financial note disclosures carefully."]
     simulate_ace(mock_samples, initial_playbook)
