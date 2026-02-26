@@ -69,7 +69,8 @@ derived_metrics = {
     }
 }
 
-PIOTROSKI_KEYWORDS = ["piotroski", "f-score", "f score", "fscore", "financial strength score"]
+PIOTROSKI_KEYWORDS = ["piotroski", "f-score", "f score", "fscore", "financial strength score", "financial strength"]
+PIOTROSKI_TREND_KEYWORDS = ["trend", "over time", "across years", "changed", "improved", "history", "trajectory"]
 
 trend_keywords = {
     "trend": ["trend", "over time", "across years"],
@@ -109,8 +110,16 @@ class Generator:
 
         is_derived = metric in derived_metrics if metric else False
         is_piotroski = any(kw in q for kw in PIOTROSKI_KEYWORDS)
+        is_piotroski_trend = is_piotroski and (
+            any(kw in q for kw in PIOTROSKI_TREND_KEYWORDS)
+            or bool(re.search(r"last\s+\d+\s+years?", q))
+            or bool(re.search(r"from\s+20\d{2}\s+to\s+20\d{2}", q))
+            or bool(re.search(r"since\s+20\d{2}", q))
+        )
 
-        if is_piotroski:
+        if is_piotroski_trend:
+            intent = "piotroski_trend"
+        elif is_piotroski:
             intent = "piotroski"
         elif is_trend:
             intent = "trend"
@@ -136,7 +145,8 @@ class Generator:
             "is_trend": is_trend,
             "is_comparison": is_comparison,
             "is_derived": is_derived,
-            "is_piotroski": is_piotroski
+            "is_piotroski": is_piotroski,
+            "is_piotroski_trend": is_piotroski_trend
         }
 
     def generate(self, question: str) -> Dict:
@@ -160,6 +170,12 @@ class Generator:
         
         comparison_keywords = ["vs", "versus", "compare", "comparison", "and"]
         is_comparison = any(k in q for k in comparison_keywords) and len(companies) > 1
+
+        # Piotroski trend: intercept before single-company / comparison routing
+        if plan.get("is_piotroski_trend"):
+            year_range = extract_piotroski_year_range(question)
+            company = companies[0] if companies else None
+            return self.handle_piotroski_trend(company, year_range, reasoning)
 
         # Piotroski intent: intercept before derived/base metric routing
         if plan.get("is_piotroski"):
@@ -422,9 +438,13 @@ class Generator:
         """
         Handle Piotroski F-Score queries.
 
+        Routes to comparison handler when multiple companies detected.
         Uses Option C caching: check DB first, compute only if missing.
         Returns structured response with score, signals, explanation, confidence.
         """
+        if len(companies) > 1:
+            return self.handle_piotroski_comparison(companies, year, reasoning)
+
         company = companies[0] if companies else None
         if not company:
             return {
@@ -472,6 +492,7 @@ class Generator:
             "used_aggregation": False,
             "is_derived": False,
             "is_piotroski": True,
+            "is_piotroski_trend": False,
             "missing_components": result["total_score"] is None,
             "is_comparison": False,
             "companies": companies,
@@ -480,6 +501,187 @@ class Generator:
             "year": year,
             "confidence": confidence,
         }
+
+    def handle_piotroski_comparison(self, companies: list, year: int, reasoning: str) -> Dict:
+        """
+        Handle multi-company Piotroski F-Score comparison.
+
+        For each company: retrieve (or compute+persist) via get_piotroski_from_db().
+        Rank by total_score descending, with alphabetical tiebreak.
+        Confidence = minimum of individual confidences.
+        """
+        entries = []
+
+        for company in companies:
+            result = get_piotroski_from_db(company, year)
+            conf = compute_piotroski_confidence(result["max_possible"])
+            entries.append({
+                "company": company,
+                "score": result["total_score"],
+                "max_possible": result["max_possible"],
+                "confidence": conf,
+            })
+            reasoning += (
+                f" -> {company}: score={result['total_score']}/{result['max_possible']}"
+            )
+
+        # Sort: descending by score (None sorts last), then alphabetical tiebreak
+        ranking = sorted(
+            entries,
+            key=lambda e: (
+                e["score"] if e["score"] is not None else -1,
+                -ord(e["company"][0]),  # reverse alpha for secondary sort
+            ),
+            reverse=True,
+        )
+
+        # Determine winner or tie
+        scoreable = [e for e in ranking if e["score"] is not None]
+        if len(scoreable) >= 2 and scoreable[0]["score"] == scoreable[1]["score"]:
+            winner = None  # tie
+        elif scoreable:
+            winner = scoreable[0]["company"]
+        else:
+            winner = None
+
+        # Confidence = minimum across all companies (penalizes weak data)
+        all_confidences = [e["confidence"] for e in entries]
+        comparison_confidence = min(all_confidences) if all_confidences else 0.2
+        confidence_label = (
+            "high" if comparison_confidence >= 0.8
+            else "medium" if comparison_confidence >= 0.5
+            else "low"
+        )
+
+        explanation = build_piotroski_comparison_explanation(ranking, year, winner)
+
+        comparison_answer = {
+            "year": year,
+            "ranking": [
+                {
+                    "company": e["company"],
+                    "score": e["score"],
+                    "max_possible": e["max_possible"],
+                    "confidence": e["confidence"],
+                }
+                for e in ranking
+            ],
+            "winner": winner,
+            "explanation": explanation,
+            "confidence": comparison_confidence,
+            "confidence_label": confidence_label,
+        }
+
+        return {
+            "reasoning": reasoning,
+            "used_bullets": list(range(min(3, len(self.playbook)))),
+            "final_answer": comparison_answer,
+            "used_aggregation": False,
+            "is_derived": False,
+            "is_piotroski": True,
+            "is_piotroski_trend": False,
+            "missing_components": not scoreable,
+            "is_comparison": True,
+            "companies": companies,
+            "intent": "piotroski_comparison",
+            "metric": "piotroski_f_score",
+            "year": year,
+            "confidence": comparison_confidence,
+        }
+
+    def handle_piotroski_trend(
+        self, company: str, year_range: tuple, reasoning: str
+    ) -> Dict:
+        """
+        Handle multi-year Piotroski F-Score trend analysis.
+
+        For each year in range: retrieve (or compute+persist) via get_piotroski_from_db().
+        Confidence = min of yearly confidences, penalized proportionally for missing years.
+        """
+        if not company:
+            return {
+                "reasoning": reasoning + " -> no company identified for Piotroski trend",
+                "used_bullets": [],
+                "final_answer": None,
+                "used_aggregation": False,
+                "is_derived": False,
+                "is_piotroski": True,
+                "is_piotroski_trend": True,
+                "missing_components": True,
+                "is_comparison": False,
+                "companies": [],
+                "intent": "piotroski_trend",
+                "metric": "piotroski_f_score",
+                "year": year_range[1],
+                "confidence": 0.2,
+            }
+
+        start_year, end_year = year_range
+        trend_data = []
+
+        for year in range(start_year, end_year + 1):
+            result = get_piotroski_from_db(company, year)
+            conf = compute_piotroski_confidence(result["max_possible"])
+            trend_data.append({
+                "year": year,
+                "score": result["total_score"],
+                "max_possible": result["max_possible"],
+                "confidence": conf,
+            })
+            reasoning += (
+                f" -> {year}: score={result['total_score']}/{result['max_possible']}"
+            )
+
+        direction = classify_piotroski_trend(trend_data)
+
+        # Confidence = min of yearly confidences, scaled by data coverage
+        valid_entries = [d for d in trend_data if d["score"] is not None]
+        if valid_entries:
+            base_confidence = min(d["confidence"] for d in valid_entries)
+            coverage = len(valid_entries) / len(trend_data)
+            confidence = round(max(0.2, base_confidence * coverage), 2)
+        else:
+            confidence = 0.2
+
+        confidence_label = (
+            "high" if confidence >= 0.8
+            else "medium" if confidence >= 0.5
+            else "low"
+        )
+
+        explanation = build_piotroski_trend_explanation(
+            company, trend_data, direction, year_range
+        )
+
+        trend_answer = {
+            "company": company,
+            "trend": [
+                {"year": d["year"], "score": d["score"]}
+                for d in trend_data
+            ],
+            "direction": direction,
+            "explanation": explanation,
+            "confidence": confidence,
+            "confidence_label": confidence_label,
+        }
+
+        return {
+            "reasoning": reasoning,
+            "used_bullets": list(range(min(3, len(self.playbook)))),
+            "final_answer": trend_answer,
+            "used_aggregation": False,
+            "is_derived": False,
+            "is_piotroski": True,
+            "is_piotroski_trend": True,
+            "missing_components": not valid_entries,
+            "is_comparison": False,
+            "companies": [company],
+            "intent": "piotroski_trend",
+            "metric": "piotroski_f_score",
+            "year": end_year,
+            "confidence": confidence,
+        }
+
 
 class Reflector:
     """Compares prediction vs. ground truth to extract insights."""
@@ -767,6 +969,139 @@ def build_piotroski_explanation(result: dict) -> str:
     return " ".join(parts)
 
 
+def build_piotroski_comparison_explanation(ranking: list, year: int, winner) -> str:
+    """
+    Template-based explanation for multi-company Piotroski comparison.
+    Deterministic, no LLM. Never invents numbers.
+    """
+    score_parts = []
+    for entry in ranking:
+        score = entry["score"]
+        if score is not None:
+            score_parts.append(f"{entry['company']} scored {score}/{entry['max_possible']}")
+        else:
+            score_parts.append(f"{entry['company']} has insufficient data")
+
+    parts = [f"Comparing Piotroski F-Scores for {year}: {', '.join(score_parts)}."]
+
+    if winner:
+        parts.append(f"{winner} has the highest score.")
+    else:
+        tied = [e for e in ranking if e["score"] is not None]
+        if len(tied) >= 2 and tied[0]["score"] == tied[1]["score"]:
+            tied_names = [e["company"] for e in tied if e["score"] == tied[0]["score"]]
+            parts.append(f"{' and '.join(tied_names)} are tied at {tied[0]['score']}.")
+        else:
+            parts.append("No clear winner could be determined.")
+
+    return " ".join(parts)
+
+
+def extract_piotroski_year_range(question: str, default_end: int = 2023) -> tuple:
+    """
+    Extract year range from a Piotroski trend question.
+
+    Handles: "from YYYY to YYYY", "last N years", "since YYYY",
+    two explicit years, or defaults to 5-year range.
+    """
+    q = question.lower()
+
+    # "from YYYY to YYYY"
+    m = re.search(r"from\s+(20\d{2})\s+to\s+(20\d{2})", q)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+
+    # "last N years"
+    m = re.search(r"last\s+(\d+)\s+years?", q)
+    if m:
+        n = int(m.group(1))
+        explicit_years = [int(y) for y in re.findall(r"(20\d{2})", q)]
+        end = max(explicit_years) if explicit_years else default_end
+        return (end - n + 1, end)
+
+    # "since YYYY"
+    m = re.search(r"since\s+(20\d{2})", q)
+    if m:
+        start = int(m.group(1))
+        other_years = [int(y) for y in re.findall(r"(20\d{2})", q) if int(y) != start]
+        end = max(other_years) if other_years else default_end
+        return (start, end)
+
+    # Two or more explicit years
+    years = [int(y) for y in re.findall(r"(20\d{2})", q)]
+    if len(years) >= 2:
+        return (min(years), max(years))
+
+    # Default: 5-year range ending at the explicit year or default_end
+    end = years[0] if years else default_end
+    return (end - 4, end)
+
+
+def classify_piotroski_trend(trend_data: list) -> str:
+    """
+    Classify Piotroski trend direction from multi-year data.
+
+    Returns: "improving", "declining", "stable", or "insufficient data".
+    Compares first and last non-None scores.
+    """
+    scored = [(d["year"], d["score"]) for d in trend_data if d["score"] is not None]
+
+    if len(scored) < 2:
+        return "insufficient data"
+
+    first_score = scored[0][1]
+    last_score = scored[-1][1]
+
+    if last_score > first_score:
+        return "improving"
+    elif last_score < first_score:
+        return "declining"
+    else:
+        return "stable"
+
+
+def build_piotroski_trend_explanation(
+    company: str, trend_data: list, direction: str, year_range: tuple
+) -> str:
+    """
+    Template-based explanation for multi-year Piotroski trend.
+    Deterministic, no LLM. Never invents numbers.
+    """
+    start, end = year_range
+
+    scored = [d for d in trend_data if d["score"] is not None]
+    missing = [d for d in trend_data if d["score"] is None]
+
+    parts = [f"{company}'s Piotroski F-Score trend from {start} to {end}:"]
+
+    score_strs = []
+    for d in trend_data:
+        if d["score"] is not None:
+            score_strs.append(f"{d['year']}: {d['score']}/{d['max_possible']}")
+        else:
+            score_strs.append(f"{d['year']}: N/A")
+    parts.append(", ".join(score_strs) + ".")
+
+    if direction == "improving":
+        parts.append(
+            f"The trend is improving ({scored[0]['score']} -> {scored[-1]['score']})."
+        )
+    elif direction == "declining":
+        parts.append(
+            f"The trend is declining ({scored[0]['score']} -> {scored[-1]['score']})."
+        )
+    elif direction == "stable":
+        parts.append(f"The score has remained stable at {scored[0]['score']}.")
+    else:
+        parts.append("Insufficient data to determine a trend.")
+
+    if missing:
+        missing_years = [str(d["year"]) for d in missing]
+        parts.append(f"Data unavailable for: {', '.join(missing_years)}.")
+
+    return " ".join(parts)
+
+
 def format_answer_with_confidence(answer, confidence):
     return {
         "answer": answer,
@@ -840,6 +1175,23 @@ def build_explanation(prediction: dict) -> str:
             f"I retrieved the Piotroski F-Score"
             f"{' for ' + companies[0] if companies else ''}"
             f"{' in ' + str(year) if year else ''}."
+        )
+
+    elif intent == "piotroski_comparison":
+        parts.append(
+            f"I compared Piotroski F-Scores across"
+            f" {', '.join(companies)}"
+            f"{' in ' + str(year) if year else ''}."
+        )
+
+    elif intent == "piotroski_trend":
+        trend_answer = prediction.get("final_answer") or {}
+        start = trend_answer.get("trend", [{}])[0].get("year", "")
+        end = trend_answer.get("trend", [{}])[-1].get("year", "") if trend_answer.get("trend") else ""
+        parts.append(
+            f"I analyzed the Piotroski F-Score trend"
+            f"{' for ' + companies[0] if companies else ''}"
+            f"{' from ' + str(start) + ' to ' + str(end) if start and end else ''}."
         )
 
     confidence = prediction.get("confidence", 0)
@@ -1121,6 +1473,22 @@ if __name__ == "__main__":
     },
     {
         "question": "How strong is Microsoft's F-score?",
+        "metric": "piotroski_f_score"
+    },
+
+    # Piotroski comparison queries
+    {
+        "question": "Compare Microsoft and Google by Piotroski score in 2023",
+        "metric": "piotroski_f_score"
+    },
+
+    # Piotroski trend queries
+    {
+        "question": "Show Microsoft's Piotroski trend from 2019 to 2023",
+        "metric": "piotroski_f_score"
+    },
+    {
+        "question": "Has Microsoft's financial strength improved over the last 5 years?",
         "metric": "piotroski_f_score"
     },
 ]
