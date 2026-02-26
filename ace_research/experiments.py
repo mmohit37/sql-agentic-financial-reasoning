@@ -11,7 +11,7 @@ import re
 from collections import defaultdict
 from ace_research.generator import format_comparison_answer
 from ace_research.db import get_available_aggregations, get_available_metrics, get_confidence_history, get_available_years, get_available_companies
-from ace_research.db import query_aggregate, get_canonical_financial_fact, get_derived_metrics_by_prefix
+from ace_research.db import query_aggregate, get_canonical_financial_fact, get_derived_metrics_by_prefix, get_metric_ratio
 from ace_research.piotroski import compute_piotroski_score, persist_piotroski_score
 
 derived_metrics = {
@@ -71,6 +71,7 @@ derived_metrics = {
 
 PIOTROSKI_KEYWORDS = ["piotroski", "f-score", "f score", "fscore", "financial strength score", "financial strength"]
 PIOTROSKI_TREND_KEYWORDS = ["trend", "over time", "across years", "changed", "improved", "history", "trajectory"]
+RISK_KEYWORDS = ["risk", "warning", "red flag", "danger", "concern", "alert", "weakness", "deteriorat"]
 
 trend_keywords = {
     "trend": ["trend", "over time", "across years"],
@@ -116,11 +117,17 @@ class Generator:
             or bool(re.search(r"from\s+20\d{2}\s+to\s+20\d{2}", q))
             or bool(re.search(r"since\s+20\d{2}", q))
         )
+        is_risk_flags = (
+            not is_piotroski
+            and any(kw in q for kw in RISK_KEYWORDS)
+        )
 
         if is_piotroski_trend:
             intent = "piotroski_trend"
         elif is_piotroski:
             intent = "piotroski"
+        elif is_risk_flags:
+            intent = "risk_flags"
         elif is_trend:
             intent = "trend"
         elif is_comparison:
@@ -146,7 +153,8 @@ class Generator:
             "is_comparison": is_comparison,
             "is_derived": is_derived,
             "is_piotroski": is_piotroski,
-            "is_piotroski_trend": is_piotroski_trend
+            "is_piotroski_trend": is_piotroski_trend,
+            "is_risk_flags": is_risk_flags
         }
 
     def generate(self, question: str) -> Dict:
@@ -180,6 +188,11 @@ class Generator:
         # Piotroski intent: intercept before derived/base metric routing
         if plan.get("is_piotroski"):
             return self.handle_piotroski(companies, year, reasoning)
+
+        # Risk flag assessment
+        if plan.get("is_risk_flags"):
+            company = companies[0] if companies else None
+            return self.handle_risk_flags(company, year, reasoning)
 
         agg = None
 
@@ -682,6 +695,75 @@ class Generator:
             "confidence": confidence,
         }
 
+    def handle_risk_flags(
+        self, company: str, year: int, reasoning: str
+    ) -> Dict:
+        """
+        Evaluate deterministic financial risk flags for a single company/year.
+
+        Calls build_risk_flags() which uses only existing DB helpers.
+        No LLM reasoning, no new math.
+        """
+        if not company:
+            return {
+                "reasoning": reasoning + " -> no company identified for risk assessment",
+                "used_bullets": [],
+                "final_answer": None,
+                "used_aggregation": False,
+                "is_derived": False,
+                "is_piotroski": False,
+                "is_piotroski_trend": False,
+                "is_risk_flags": True,
+                "missing_components": True,
+                "is_comparison": False,
+                "companies": [],
+                "intent": "risk_flags",
+                "metric": None,
+                "year": year,
+                "confidence": 0.2,
+            }
+
+        result = build_risk_flags(company, year)
+        explanation = build_risk_explanation(result)
+        confidence = result["confidence"]
+        confidence_label = (
+            "high" if confidence >= 0.8
+            else "medium" if confidence >= 0.5
+            else "low"
+        )
+
+        risk_answer = {
+            "company": company,
+            "year": year,
+            "risk_flags": result["risk_flags"],
+            "explanation": explanation,
+            "confidence": confidence,
+            "confidence_label": confidence_label,
+        }
+
+        reasoning += (
+            f" -> evaluated {result['evaluated_rules']}/6 risk rules,"
+            f" found {len(result['risk_flags'])} flag(s)"
+        )
+
+        return {
+            "reasoning": reasoning,
+            "used_bullets": list(range(min(3, len(self.playbook)))),
+            "final_answer": risk_answer,
+            "used_aggregation": False,
+            "is_derived": False,
+            "is_piotroski": False,
+            "is_piotroski_trend": False,
+            "is_risk_flags": True,
+            "missing_components": result["evaluated_rules"] == 0,
+            "is_comparison": False,
+            "companies": [company],
+            "intent": "risk_flags",
+            "metric": None,
+            "year": year,
+            "confidence": confidence,
+        }
+
 
 class Reflector:
     """Compares prediction vs. ground truth to extract insights."""
@@ -1066,38 +1148,150 @@ def build_piotroski_trend_explanation(
     """
     Template-based explanation for multi-year Piotroski trend.
     Deterministic, no LLM. Never invents numbers.
+
+    Format:
+        {company}'s Piotroski F-Score trend from {start} to {end}.
+        Available years: 2021 (6), 2022 (7), 2023 (8).
+        Missing years: 2019, 2020.
+        Trend: improving (6 -> 8).
     """
     start, end = year_range
 
     scored = [d for d in trend_data if d["score"] is not None]
     missing = [d for d in trend_data if d["score"] is None]
 
-    parts = [f"{company}'s Piotroski F-Score trend from {start} to {end}:"]
+    parts = [f"{company}'s Piotroski F-Score trend from {start} to {end}."]
 
-    score_strs = []
-    for d in trend_data:
-        if d["score"] is not None:
-            score_strs.append(f"{d['year']}: {d['score']}/{d['max_possible']}")
-        else:
-            score_strs.append(f"{d['year']}: N/A")
-    parts.append(", ".join(score_strs) + ".")
-
-    if direction == "improving":
-        parts.append(
-            f"The trend is improving ({scored[0]['score']} -> {scored[-1]['score']})."
-        )
-    elif direction == "declining":
-        parts.append(
-            f"The trend is declining ({scored[0]['score']} -> {scored[-1]['score']})."
-        )
-    elif direction == "stable":
-        parts.append(f"The score has remained stable at {scored[0]['score']}.")
-    else:
-        parts.append("Insufficient data to determine a trend.")
+    if scored:
+        available_str = ", ".join(f"{d['year']} ({d['score']})" for d in scored)
+        parts.append(f"Available years: {available_str}.")
 
     if missing:
-        missing_years = [str(d["year"]) for d in missing]
-        parts.append(f"Data unavailable for: {', '.join(missing_years)}.")
+        missing_str = ", ".join(str(d["year"]) for d in missing)
+        parts.append(f"Missing years: {missing_str}.")
+
+    if direction == "improving":
+        parts.append(f"Trend: improving ({scored[0]['score']} -> {scored[-1]['score']}).")
+    elif direction == "declining":
+        parts.append(f"Trend: declining ({scored[0]['score']} -> {scored[-1]['score']}).")
+    elif direction == "stable":
+        parts.append(f"Trend: stable ({scored[0]['score']}).")
+    else:
+        parts.append("Trend: insufficient data.")
+
+    return " ".join(parts)
+
+
+def build_risk_flags(company: str, year: int) -> dict:
+    """
+    Evaluate 6 deterministic risk rules for a company in a given year.
+
+    Rules:
+      1. Piotroski score <= 3  → "Weak financial strength"
+      2. ROA declining YoY     → "Profitability deteriorating"
+      3. Gross margin declining → "Margin compression"
+      4. Leverage increasing   → "Rising financial leverage"
+      5. Liquidity declining   → "Liquidity weakening"
+      6. CFO < Net Income      → "Low earnings quality"
+
+    Uses only existing DB helpers. No new math.
+    Confidence reflects how many of the 6 rules had sufficient data.
+    """
+    flags = []
+    evaluated = 0
+
+    # Rule 1: Piotroski score <= 3
+    piotroski_result = get_piotroski_from_db(company, year)
+    if piotroski_result["total_score"] is not None:
+        evaluated += 1
+        if piotroski_result["total_score"] <= 3:
+            flags.append("Weak financial strength")
+
+    # Rule 2: ROA (net_income / total_assets) declining YoY
+    roa_cur = get_metric_ratio("net_income", "total_assets", year, company)
+    roa_pri = get_metric_ratio("net_income", "total_assets", year - 1, company)
+    if roa_cur is not None and roa_pri is not None:
+        evaluated += 1
+        if roa_cur < roa_pri:
+            flags.append("Profitability deteriorating")
+
+    # Rule 3: Gross margin (gross_profit / revenue) declining YoY
+    gm_cur = get_metric_ratio("gross_profit", "revenue", year, company)
+    gm_pri = get_metric_ratio("gross_profit", "revenue", year - 1, company)
+    if gm_cur is not None and gm_pri is not None:
+        evaluated += 1
+        if gm_cur < gm_pri:
+            flags.append("Margin compression")
+
+    # Rule 4: Leverage (long_term_debt / total_assets) increasing YoY
+    lev_cur = get_metric_ratio("long_term_debt", "total_assets", year, company)
+    lev_pri = get_metric_ratio("long_term_debt", "total_assets", year - 1, company)
+    if lev_cur is not None and lev_pri is not None:
+        evaluated += 1
+        if lev_cur > lev_pri:
+            flags.append("Rising financial leverage")
+
+    # Rule 5: Liquidity (current_assets / current_liabilities) declining YoY
+    liq_cur = get_metric_ratio("current_assets", "current_liabilities", year, company)
+    liq_pri = get_metric_ratio("current_assets", "current_liabilities", year - 1, company)
+    if liq_cur is not None and liq_pri is not None:
+        evaluated += 1
+        if liq_cur < liq_pri:
+            flags.append("Liquidity weakening")
+
+    # Rule 6: CFO < Net Income (low earnings quality)
+    cfo = get_canonical_financial_fact("operating_cash_flow", year, company)
+    net_income = get_canonical_financial_fact("net_income", year, company)
+    if cfo is not None and net_income is not None:
+        evaluated += 1
+        if cfo < net_income:
+            flags.append("Low earnings quality")
+
+    # Confidence based on how many rules could be evaluated
+    if evaluated >= 5:
+        confidence = 0.9
+    elif evaluated >= 3:
+        confidence = 0.65
+    elif evaluated >= 1:
+        confidence = 0.4
+    else:
+        confidence = 0.2
+
+    return {
+        "company": company,
+        "year": year,
+        "risk_flags": flags,
+        "evaluated_rules": evaluated,
+        "confidence": confidence,
+    }
+
+
+def build_risk_explanation(result: dict) -> str:
+    """
+    Template-based explanation for risk flag assessment.
+    Deterministic, no LLM.
+    """
+    company = result["company"]
+    year = result["year"]
+    flags = result["risk_flags"]
+    evaluated = result["evaluated_rules"]
+
+    if evaluated == 0:
+        return (
+            f"Insufficient data to evaluate financial risks for {company} in {year}."
+        )
+
+    parts = [
+        f"Financial risk assessment for {company} in {year}"
+        f" ({evaluated}/6 rules evaluated):"
+    ]
+
+    if not flags:
+        parts.append("No risk flags detected.")
+    else:
+        parts.append(
+            f"{len(flags)} risk flag(s) detected: {', '.join(sorted(flags))}."
+        )
 
     return " ".join(parts)
 
@@ -1194,6 +1388,20 @@ def build_explanation(prediction: dict) -> str:
             f"{' from ' + str(start) + ' to ' + str(end) if start and end else ''}."
         )
 
+    elif intent == "risk_flags":
+        risk_answer = prediction.get("final_answer") or {}
+        flag_count = len(risk_answer.get("risk_flags", []))
+        parts.append(
+            f"I assessed financial risk signals"
+            f"{' for ' + companies[0] if companies else ''}"
+            f"{' in ' + str(year) if year else ''}."
+            + (
+                f" Found {flag_count} risk flag(s)."
+                if flag_count > 0
+                else " No risk flags detected."
+            )
+        )
+
     confidence = prediction.get("confidence", 0)
     if confidence >= 0.8:
         parts.append("The data supporting this answer is complete and consistent.")
@@ -1229,8 +1437,8 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
         # Step 1: Generate
         prediction = generator.generate(question)
 
-        # Use Piotroski-specific confidence when applicable
-        if prediction.get("is_piotroski") and "confidence" in prediction:
+        # Use structured confidence when available (Piotroski / risk flags)
+        if (prediction.get("is_piotroski") or prediction.get("is_risk_flags")) and "confidence" in prediction:
             confidence = prediction["confidence"]
         else:
             confidence = compute_confidence(
@@ -1253,8 +1461,8 @@ def simulate_ace(samples: List[Dict], initial_playbook: List[str]):
 
         serialized_answer = json.dumps(spoken_answer)
 
-        # Piotroski: store and continue (no ground truth to compare)
-        if prediction.get("is_piotroski"):
+        # Piotroski / risk flags: store and continue (no ground truth to compare)
+        if prediction.get("is_piotroski") or prediction.get("is_risk_flags"):
             prediction_id = store_prediction(question, serialized_answer, confidence)
             store_feedback(prediction_id, None, 1)
             continue
@@ -1490,6 +1698,16 @@ if __name__ == "__main__":
     {
         "question": "Has Microsoft's financial strength improved over the last 5 years?",
         "metric": "piotroski_f_score"
+    },
+
+    # Risk flag queries
+    {
+        "question": "Are there any financial risks for Microsoft in 2023?",
+        "metric": "risk_flags"
+    },
+    {
+        "question": "What warning signs does Google show in 2023?",
+        "metric": "risk_flags"
     },
 ]
     initial_playbook = ["Always read financial note disclosures carefully."]

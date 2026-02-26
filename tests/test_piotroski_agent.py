@@ -1231,7 +1231,8 @@ def test_trend_explanation_helper_missing_years():
     ]
     expl = build_piotroski_trend_explanation("TestCo", data, "improving", (2020, 2022))
 
-    assert "N/A" in expl
+    # New format uses "Missing years:" section instead of "N/A" inline
+    assert "Missing years" in expl
     assert "2020" in expl
 
 
