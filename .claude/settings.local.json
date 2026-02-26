@@ -12,7 +12,8 @@
       "Bash(python -m ace_research.xbrl.ingest:*)",
       "Bash(python -c:*)",
       "Bash(python -m ace_research.xbrl.backfill:*)",
-      "Bash(python -m ace_research.piotroski:*)"
+      "Bash(python -m ace_research.piotroski:*)",
+      "Bash(python -m ace_research.report --company Microsoft --years 2021 2022 2023)"
     ]
   }
 }
