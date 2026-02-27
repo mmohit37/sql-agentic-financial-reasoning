@@ -74,29 +74,66 @@ class TestFormatHelpers:
     def test_fmt_num_exactly_1000(self):
         assert pdf_module._fmt_num(1000.0) == "1,000"
 
+    # ── _fmt_num  (B/M scaling) ───────────────────────────────────────────────
+    def test_fmt_num_billions_exact(self):
+        assert pdf_module._fmt_num(1_000_000_000) == "1B"
+
+    def test_fmt_num_billions_fractional(self):
+        assert pdf_module._fmt_num(111_600_000_000) == "111.6B"
+
+    def test_fmt_num_billions_round(self):
+        assert pdf_module._fmt_num(72_000_000_000) == "72B"
+
+    def test_fmt_num_billions_negative(self):
+        assert pdf_module._fmt_num(-6_343_000_000) == "-6.3B"
+
+    def test_fmt_num_millions_fractional(self):
+        assert pdf_module._fmt_num(12_500_000) == "12.5M"
+
+    def test_fmt_num_millions_exact(self):
+        assert pdf_module._fmt_num(5_000_000) == "5M"
+
     # ── _fmt_pct ──────────────────────────────────────────────────────────────
-    def test_fmt_pct_normal(self):
-        assert pdf_module._fmt_pct(0.42) == "42.00%"
+    def test_fmt_pct_whole_number(self):
+        assert pdf_module._fmt_pct(0.42) == "42%"
+
+    def test_fmt_pct_one_decimal(self):
+        assert pdf_module._fmt_pct(0.421) == "42.1%"
 
     def test_fmt_pct_zero(self):
-        assert pdf_module._fmt_pct(0.0) == "0.00%"
+        assert pdf_module._fmt_pct(0.0) == "0%"
 
     def test_fmt_pct_none(self):
         assert pdf_module._fmt_pct(None) == "N/A"
 
+    def test_fmt_pct_negative(self):
+        assert pdf_module._fmt_pct(-0.005) == "-0.5%"
+
     # ── _fmt_ratio ────────────────────────────────────────────────────────────
-    def test_fmt_ratio_normal(self):
-        assert pdf_module._fmt_ratio(2.1) == "2.1000"
+    def test_fmt_ratio_two_decimals(self):
+        assert pdf_module._fmt_ratio(1.78) == "1.78"
+
+    def test_fmt_ratio_one_decimal(self):
+        assert pdf_module._fmt_ratio(2.1) == "2.1"
+
+    def test_fmt_ratio_whole_number(self):
+        assert pdf_module._fmt_ratio(2.0) == "2"
 
     def test_fmt_ratio_none(self):
         assert pdf_module._fmt_ratio(None) == "N/A"
 
     # ── _fmt_yoy ──────────────────────────────────────────────────────────────
-    def test_fmt_yoy_positive(self):
-        assert pdf_module._fmt_yoy(10.0) == "+10.00%"
+    def test_fmt_yoy_positive_whole(self):
+        assert pdf_module._fmt_yoy(10.0) == "+10%"
 
-    def test_fmt_yoy_negative(self):
-        assert pdf_module._fmt_yoy(-5.0) == "-5.00%"
+    def test_fmt_yoy_positive_decimal(self):
+        assert pdf_module._fmt_yoy(22.1) == "+22.1%"
+
+    def test_fmt_yoy_negative_whole(self):
+        assert pdf_module._fmt_yoy(-5.0) == "-5%"
+
+    def test_fmt_yoy_negative_decimal(self):
+        assert pdf_module._fmt_yoy(-0.5) == "-0.5%"
 
     def test_fmt_yoy_none(self):
         assert pdf_module._fmt_yoy(None) == "N/A"
@@ -223,10 +260,17 @@ class TestModuleGuarantees:
     def test_fmt_helpers_importable_without_reportlab(self):
         """Pure format helpers work regardless of ReportLab availability."""
         assert pdf_module._fmt_num(1234.0) == "1,234"
-        assert pdf_module._fmt_pct(0.5) == "50.00%"
-        assert pdf_module._fmt_ratio(1.5) == "1.5000"
-        assert pdf_module._fmt_yoy(5.0) == "+5.00%"
+        assert pdf_module._fmt_pct(0.5) == "50%"
+        assert pdf_module._fmt_ratio(1.5) == "1.5"
+        assert pdf_module._fmt_yoy(5.0) == "+5%"
         assert pdf_module._fmt_score(9) == "9"
+
+    def test_units_subtitle_in_source(self):
+        """The units disclaimer must be hard-coded in generate_pdf() source."""
+        import inspect
+        src = inspect.getsource(pdf_module.generate_pdf)
+        assert "USD" in src
+        assert "billions" in src
 
 
 if __name__ == "__main__":

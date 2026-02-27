@@ -61,7 +61,14 @@ _METRIC_LABELS: dict[str, str] = {
 def _fmt_num(value: Optional[float]) -> str:
     if value is None:
         return "N/A"
-    if abs(value) >= 1_000:
+    abs_v = abs(value)
+    if abs_v >= 1_000_000_000:
+        s = f"{value / 1_000_000_000:.1f}".rstrip("0").rstrip(".")
+        return f"{s}B"
+    if abs_v >= 1_000_000:
+        s = f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".")
+        return f"{s}M"
+    if abs_v >= 1_000:
         return f"{value:,.0f}"
     return f"{value:.2f}"
 
@@ -69,20 +76,22 @@ def _fmt_num(value: Optional[float]) -> str:
 def _fmt_pct(value: Optional[float]) -> str:
     if value is None:
         return "N/A"
-    return f"{value * 100:.2f}%"
+    s = f"{value * 100:.1f}".rstrip("0").rstrip(".")
+    return f"{s}%"
 
 
 def _fmt_ratio(value: Optional[float]) -> str:
     if value is None:
         return "N/A"
-    return f"{value:.4f}"
+    return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
 def _fmt_yoy(value: Optional[float]) -> str:
     if value is None:
         return "N/A"
     sign = "+" if value >= 0 else ""
-    return f"{sign}{value:.2f}%"
+    s = f"{value:.1f}".rstrip("0").rstrip(".")
+    return f"{sign}{s}%"
 
 
 def _fmt_score(value: object) -> str:
@@ -260,6 +269,13 @@ def generate_pdf(summary: dict, narrative: str, output_path: str) -> None:
         parent=styles["Normal"],
         fontSize=10,
         textColor=colors.HexColor("#666666"),
+        spaceAfter=4,
+    )
+    units_style = ParagraphStyle(
+        "ReportUnits",
+        parent=styles["Normal"],
+        fontSize=8,
+        textColor=colors.HexColor("#999999"),
         spaceAfter=12,
     )
     section_style = ParagraphStyle(
@@ -313,6 +329,7 @@ def generate_pdf(summary: dict, narrative: str, output_path: str) -> None:
 
     story.append(Paragraph(f"Financial Summary: {company}", title_style))
     story.append(Paragraph(f"Years covered: {year_range}", subtitle_style))
+    story.append(Paragraph("(USD, billions unless otherwise noted)", units_style))
     story.append(Spacer(1, 0.15 * inch))
 
     # ── 2. Executive Overview ─────────────────────────────────────────────────
