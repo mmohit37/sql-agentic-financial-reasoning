@@ -326,7 +326,18 @@ if __name__ == "__main__":
         "--years", required=True, nargs="+", type=int, metavar="YEAR",
         help="One or more fiscal years (e.g. 2021 2022 2023)",
     )
+    parser.add_argument(
+        "--pdf", default=None, metavar="OUTPUT_PATH",
+        help="Optional: generate a PDF report and save to OUTPUT_PATH",
+    )
     args = parser.parse_args()
 
     summary = build_financial_summary(args.company, args.years)
     render_financial_summary_cli(summary)
+
+    if args.pdf:
+        from ace_research.report_narrative import generate_narrative
+        from ace_research.report_pdf import generate_pdf
+        narrative = generate_narrative(summary)
+        generate_pdf(summary, narrative, args.pdf)
+        print(f"PDF saved to: {args.pdf}")
