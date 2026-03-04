@@ -156,6 +156,36 @@ def build_financial_summary(company: str, years: list[int]) -> dict:
     else:
         quality_metrics["risk_flags"] = []
 
+    # --- Derived Metric Fallbacks ---
+    # Summary-layer only. DB is never mutated. Explicit values are never overridden.
+    for yr in years:
+        rev     = income_statement["revenue"]["values"].get(yr)
+        net_inc = income_statement["net_income"]["values"].get(yr)
+        assets  = balance_sheet["total_assets"]["values"].get(yr)
+        liabs   = balance_sheet["total_liabilities"]["values"].get(yr)
+
+        # 1) Gross Profit: revenue - cost_of_revenue when gross_profit is absent
+        gp = get_canonical_financial_fact("gross_profit", yr, company)
+        if gp is None and rev is not None:
+            cor = get_canonical_financial_fact("cost_of_revenue", yr, company)
+            if cor is not None:
+                gp = rev - cor
+
+        # 2) Gross Margin: gross_profit / revenue (explicit or derived above)
+        if quality_metrics["gross_margin"]["values"].get(yr) is None:
+            if gp is not None and rev:
+                quality_metrics["gross_margin"]["values"][yr] = gp / rev
+
+        # 3) Total Equity: assets - liabilities when not directly reported
+        if balance_sheet["total_equity"]["values"].get(yr) is None:
+            if assets is not None and liabs is not None:
+                balance_sheet["total_equity"]["values"][yr] = assets - liabs
+
+        # 4) Net Margin: net_income / revenue when not already in quality metrics
+        if quality_metrics["net_margin"]["values"].get(yr) is None:
+            if net_inc is not None and rev:
+                quality_metrics["net_margin"]["values"][yr] = net_inc / rev
+
     return {
         "company":           company,
         "years":             years,

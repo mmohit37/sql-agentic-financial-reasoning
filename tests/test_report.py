@@ -544,6 +544,188 @@ class TestReportIntegration:
         assert "+10.00%" in out
 
 
+# =============================================================================
+# Part F: Derived Metric Fallbacks
+# =============================================================================
+
+# FallbackCo: has revenue + cost_of_revenue (no gross_profit),
+#             has assets + liabilities (no total_equity)
+_FALLBACK_FACTS = {
+    2023: {
+        "revenue":            500.0,
+        "cost_of_revenue":    300.0,   # gross_profit NOT in DB
+        "operating_income":    80.0,
+        "net_income":          75.0,
+        "total_assets":      1000.0,
+        "total_liabilities":  400.0,   # total_equity NOT in DB
+        "current_assets":     200.0,
+        "current_liabilities": 100.0,
+        "operating_cash_flow": 80.0,
+        "long_term_debt":     150.0,
+    },
+}
+
+# ExplicitCo: same layout but WITH explicit gross_profit AND total_equity
+# (fallbacks must NOT override these)
+_EXPLICIT_FACTS = {
+    2023: {
+        "revenue":            400.0,
+        "cost_of_revenue":    100.0,   # derived would give 300; explicit gives 350
+        "gross_profit":       350.0,   # explicit — must be preserved
+        "operating_income":    64.0,
+        "net_income":          60.0,
+        "total_assets":       800.0,
+        "total_liabilities":  300.0,
+        "total_equity":       600.0,   # explicit — must be preserved (not 800-300=500)
+        "current_assets":     150.0,
+        "current_liabilities":  75.0,
+        "operating_cash_flow":  60.0,
+        "long_term_debt":     120.0,
+    },
+}
+
+
+@pytest.fixture
+def fallback_db():
+    """Temp DB containing FallbackCo and ExplicitCo for fallback testing."""
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    _create_tables(cur)
+
+    for company, fact_map in (("FallbackCo", _FALLBACK_FACTS), ("ExplicitCo", _EXPLICIT_FACTS)):
+        for year, metrics in fact_map.items():
+            for metric, value in metrics.items():
+                cur.execute(
+                    "INSERT INTO financial_facts (company, year, metric, value) "
+                    "VALUES (?, ?, ?, ?)",
+                    (company, year, metric, value),
+                )
+            # Pre-cache a Piotroski score so computation is skipped
+            provenance = json.dumps(
+                {"total_score": 5, "max_possible": 9, "signal_scores": {}}
+            )
+            cur.execute(
+                "INSERT INTO derived_metrics "
+                "(company, year, metric, value, metric_type, input_components) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (company, year, "piotroski_f_score", 5.0, "piotroski", provenance),
+            )
+
+    conn.commit()
+    conn.close()
+
+    import ace_research.db as db_module
+    original = db_module.DB_PATH
+    db_module.DB_PATH = db_path
+    yield db_path
+    db_module.DB_PATH = original
+    try:
+        os.unlink(db_path)
+    except Exception:
+        pass
+
+
+class TestDerivedMetricFallbacks:
+    """
+    Verify derived-metric fallback logic in build_financial_summary().
+    Fallbacks run only when the primary retrieval returns None.
+    """
+
+    # ── Gross Margin fallback ────────────────────────────────────────────────
+
+    def test_gross_margin_derived_from_cost_of_revenue(self, fallback_db):
+        """gross_margin = (revenue - cost_of_revenue) / revenue when no gross_profit in DB."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("FallbackCo", [2023])
+        gm = result["quality_metrics"]["gross_margin"]["values"][2023]
+        # (500 - 300) / 500 = 0.4
+        assert gm is not None
+        assert abs(gm - 0.4) < 1e-9
+
+    def test_gross_margin_none_when_cost_of_revenue_missing(self, fallback_db):
+        """When neither gross_profit nor cost_of_revenue are in DB, gross_margin stays None."""
+        from ace_research.report import build_financial_summary
+        # UnknownCo has no data at all
+        result = build_financial_summary("UnknownCo", [2023])
+        gm = result["quality_metrics"]["gross_margin"]["values"][2023]
+        assert gm is None
+
+    def test_gross_margin_not_overridden_by_fallback(self, fallback_db):
+        """When explicit gross_profit exists, fallback must not override gross_margin."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("ExplicitCo", [2023])
+        gm = result["quality_metrics"]["gross_margin"]["values"][2023]
+        # explicit: 350 / 400 = 0.875  (NOT derived 300/400 = 0.75)
+        assert gm is not None
+        assert abs(gm - 0.875) < 1e-9
+
+    # ── Total Equity fallback ────────────────────────────────────────────────
+
+    def test_equity_derived_from_assets_minus_liabilities(self, fallback_db):
+        """total_equity = total_assets - total_liabilities when equity is absent."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("FallbackCo", [2023])
+        eq = result["balance_sheet"]["total_equity"]["values"][2023]
+        # 1000 - 400 = 600
+        assert eq is not None
+        assert abs(eq - 600.0) < 1e-9
+
+    def test_equity_none_when_components_missing(self, fallback_db):
+        """When assets and liabilities are both absent, equity stays None."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("UnknownCo", [2023])
+        eq = result["balance_sheet"]["total_equity"]["values"][2023]
+        assert eq is None
+
+    def test_equity_not_overridden_when_explicit(self, fallback_db):
+        """When explicit total_equity exists, fallback must not override it."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("ExplicitCo", [2023])
+        eq = result["balance_sheet"]["total_equity"]["values"][2023]
+        # explicit 600, NOT derived 800-300=500
+        assert eq is not None
+        assert abs(eq - 600.0) < 1e-9
+
+    # ── Net Margin fallback / presence ───────────────────────────────────────
+
+    def test_net_margin_present_when_income_data_exists(self, fallback_db):
+        """net_margin is present in the summary for FallbackCo (net_income+revenue in DB)."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("FallbackCo", [2023])
+        nm = result["quality_metrics"]["net_margin"]["values"][2023]
+        # 75 / 500 = 0.15
+        assert nm is not None
+        assert abs(nm - 0.15) < 1e-9
+
+    def test_net_margin_none_when_no_data(self, fallback_db):
+        """net_margin stays None when no income data exists."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("UnknownCo", [2023])
+        nm = result["quality_metrics"]["net_margin"]["values"][2023]
+        assert nm is None
+
+    # ── Existing TestCo unchanged ─────────────────────────────────────────────
+
+    def test_testco_gross_margin_unchanged(self, report_db):
+        """TestCo has explicit gross_profit; its gross_margin must be unaffected."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("TestCo", [2022, 2023])
+        gm_2022 = result["quality_metrics"]["gross_margin"]["values"][2022]
+        # gross_profit=400, revenue=1000 -> 0.4
+        assert abs(gm_2022 - 0.4) < 1e-6
+
+    def test_testco_equity_unchanged(self, report_db):
+        """TestCo has explicit total_equity; the fallback must leave it alone."""
+        from ace_research.report import build_financial_summary
+        result = build_financial_summary("TestCo", [2022, 2023])
+        eq_2022 = result["balance_sheet"]["total_equity"]["values"][2022]
+        # explicit 1200, not derived 2000-800=1200 (same here, but proves no override issue)
+        assert abs(eq_2022 - 1200.0) < 1e-6
+
+
 if __name__ == "__main__":
     import pytest as _pytest
     _pytest.main([__file__, "-v"])
