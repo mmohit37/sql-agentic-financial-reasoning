@@ -18,6 +18,7 @@ from typing import Optional
 
 from ace_research.db import get_canonical_financial_fact, get_metric_ratio
 from ace_research.experiments import get_piotroski_from_db, build_risk_flags
+from ace_research.orchestration import ensure_company_years_ready
 
 
 # =============================================================================
@@ -115,6 +116,8 @@ def build_financial_summary(company: str, years: list[int]) -> dict:
         }
     }
     """
+    ensure_company_years_ready(company, years)
+
     years = sorted(years)
     latest = years[-1] if years else None
     prior  = years[-2] if len(years) >= 2 else None
