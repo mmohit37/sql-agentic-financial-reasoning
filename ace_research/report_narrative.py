@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ace_research.risk_engine import analyze_risk
+
 
 # =============================================================================
 # Thresholds
@@ -116,6 +118,11 @@ def generate_deterministic_narrative(summary: dict) -> str:
 
     latest = years[-1] if years else None
 
+    # Compute risk analysis and store on summary so downstream consumers (e.g.
+    # report_pdf.py) can use it without recomputing.
+    risk_analysis = analyze_risk(summary, years)
+    summary["risk_analysis"] = risk_analysis
+
     sentences: list = []
 
     # ── 1. Opening ────────────────────────────────────────────────────────────
@@ -210,6 +217,14 @@ def generate_deterministic_narrative(summary: dict) -> str:
             sentences.append(
                 f"No financial risk flags were detected for {latest}."
             )
+
+    # ── 7. Risk assessment summary ────────────────────────────────────────────
+    if latest is not None:
+        level = risk_analysis.get("overall_level", "Unknown")
+        score = risk_analysis.get("overall_score", 0)
+        sentences.append(
+            f"Risk assessment for {latest}: {level} risk level (composite score: {score:+d})."
+        )
 
     return " ".join(sentences)
 

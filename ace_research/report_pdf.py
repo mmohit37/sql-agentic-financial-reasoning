@@ -351,10 +351,41 @@ def generate_pdf(summary: dict, narrative: str, output_path: str) -> None:
     story.append(_make_quality_table(quality, years))
     story.append(Spacer(1, 0.15 * inch))
 
-    # ── 6. Risk Flags ─────────────────────────────────────────────────────────
-    flags  = quality.get("risk_flags", [])
-    latest = years[-1] if years else None
-    if latest is not None:
+    # ── 6. Risk Assessment ────────────────────────────────────────────────────
+    latest        = years[-1] if years else None
+    risk_analysis = summary.get("risk_analysis")
+
+    if latest is not None and risk_analysis is not None:
+        # Structured risk assessment from risk_engine.analyze_risk()
+        overall_level = risk_analysis.get("overall_level", "Unknown")
+        overall_score = risk_analysis.get("overall_score", 0)
+        categories    = risk_analysis.get("categories", [])
+
+        story.append(Paragraph(f"Risk Assessment ({latest})", section_style))
+
+        summary_style = ParagraphStyle(
+            "RiskSummary",
+            parent=styles["Normal"],
+            fontSize=10,
+            spaceAfter=4,
+            leftIndent=12,
+        )
+        story.append(Paragraph(f"Overall Risk Level: <b>{overall_level}</b>", summary_style))
+        story.append(Paragraph(f"Composite Score: {overall_score:+d}", summary_style))
+        story.append(Spacer(1, 0.08 * inch))
+
+        for cat in categories:
+            name     = cat.get("name", "")
+            score    = cat.get("score", 0)
+            severity = cat.get("severity", "stable").capitalize()
+            style    = risk_clear_style if score >= 0 else risk_flag_style
+            story.append(
+                Paragraph(f"\u2022 {name} \u2014 {severity} ({score:+d})", style)
+            )
+
+    elif latest is not None:
+        # Fallback: display legacy risk_flags list
+        flags = quality.get("risk_flags", [])
         if flags:
             story.append(Paragraph(f"Risk Flags ({latest}):", section_style))
             for flag in sorted(flags):
