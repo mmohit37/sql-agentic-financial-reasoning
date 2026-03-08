@@ -385,7 +385,7 @@ class TestGenerateNarrativeDispatcher:
     def test_unknown_mode_raises_not_implemented(self):
         from ace_research.report_narrative import generate_narrative
         with pytest.raises(NotImplementedError):
-            generate_narrative(SAMPLE_SUMMARY, mode="llm")
+            generate_narrative(SAMPLE_SUMMARY, mode="gpt")
 
     def test_returns_string(self):
         from ace_research.report_narrative import generate_narrative

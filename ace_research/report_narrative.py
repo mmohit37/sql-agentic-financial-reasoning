@@ -238,11 +238,22 @@ def generate_narrative(summary: dict, mode: str = "deterministic") -> str:
     Dispatcher for narrative generation.
 
     mode="deterministic"  -> generate_deterministic_narrative()
-    Any other mode        -> NotImplementedError (reserved for LLM-based modes)
+    mode="llm"            -> generate_llm_summary() with deterministic fallback
+    Any other mode        -> NotImplementedError
     """
     if mode == "deterministic":
         return generate_deterministic_narrative(summary)
+
+    if mode == "llm":
+        from ace_research.narrative_llm import generate_llm_summary
+        years = summary.get("years", [])
+        try:
+            return generate_llm_summary(summary, years)
+        except Exception:
+            # Fall back to deterministic when LLM is unavailable
+            return generate_deterministic_narrative(summary)
+
     raise NotImplementedError(
         f"Narrative mode '{mode}' is not implemented. "
-        "Only 'deterministic' is currently supported."
+        "Supported modes: 'deterministic', 'llm'."
     )

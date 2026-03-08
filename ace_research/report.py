@@ -363,6 +363,17 @@ if __name__ == "__main__":
         "--pdf", default=None, metavar="OUTPUT_PATH",
         help="Optional: generate a PDF report and save to OUTPUT_PATH",
     )
+    parser.add_argument(
+        "--narrative",
+        choices=["deterministic", "llm"],
+        default="deterministic",
+        metavar="MODE",
+        help=(
+            "Narrative generation mode for PDF output: "
+            "'deterministic' (default, no API key required) or "
+            "'llm' (calls Anthropic API; falls back to deterministic on failure)."
+        ),
+    )
     args = parser.parse_args()
 
     summary = build_financial_summary(args.company, args.years)
@@ -371,6 +382,20 @@ if __name__ == "__main__":
     if args.pdf:
         from ace_research.report_narrative import generate_narrative
         from ace_research.report_pdf import generate_pdf
-        narrative = generate_narrative(summary)
+
+        # Always build deterministic narrative first (also populates risk_analysis).
+        narrative = generate_narrative(summary, mode="deterministic")
+
+        if args.narrative == "llm":
+            try:
+                from ace_research.narrative_llm import generate_llm_summary
+                narrative = generate_llm_summary(summary, args.years)
+                print("[INFO] LLM narrative generated successfully.")
+            except Exception as exc:
+                print(
+                    f"[WARNING] LLM narrative failed ({type(exc).__name__}: {exc}); "
+                    "falling back to deterministic narrative."
+                )
+
         generate_pdf(summary, narrative, args.pdf)
         print(f"PDF saved to: {args.pdf}")
