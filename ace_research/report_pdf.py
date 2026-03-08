@@ -37,7 +37,6 @@ except ImportError:
 
 _INCOME_METRICS  = ["revenue", "operating_income", "net_income"]
 _BALANCE_METRICS = ["total_assets", "total_liabilities", "total_equity"]
-_QUALITY_MARGIN_METRICS = ["gross_margin", "operating_margin", "net_margin"]
 
 _METRIC_LABELS: dict[str, str] = {
     "revenue":           "Revenue",
@@ -51,7 +50,33 @@ _METRIC_LABELS: dict[str, str] = {
     "net_margin":        "Net Margin",
     "current_ratio":     "Current Ratio",
     "piotroski_score":   "Piotroski F-Score",
+    # Extended metrics (Phase B)
+    "asset_turnover":    "Asset Turnover",
+    "return_on_assets":  "Return on Assets",
+    "return_on_equity":  "Return on Equity",
+    "debt_ratio":        "Debt Ratio",
+    "quick_ratio":       "Quick Ratio",
 }
+
+# Keys in quality_metrics that are not tabular metric dicts (skip in table loops)
+_NON_METRIC_KEYS: frozenset = frozenset({"risk_flags"})
+
+# Preferred display order for the Financial Quality table.
+# Any metric in quality_metrics that is not listed here is appended after
+# this sequence (excluding _NON_METRIC_KEYS). piotroski_score is last so the
+# bold_last table style highlights it.
+_QUALITY_DISPLAY_ORDER: list = [
+    "gross_margin", "operating_margin", "net_margin",
+    "current_ratio", "quick_ratio",
+    "asset_turnover", "return_on_assets", "return_on_equity", "debt_ratio",
+    "piotroski_score",
+]
+
+# Metrics whose values are stored as decimal ratios and displayed as percentages
+_PCT_QUALITY_METRICS: frozenset = frozenset({
+    "gross_margin", "operating_margin", "net_margin",
+    "return_on_assets", "return_on_equity", "debt_ratio",
+})
 
 
 # =============================================================================
@@ -96,6 +121,15 @@ def _fmt_yoy(value: Optional[float]) -> str:
 
 def _fmt_score(value: object) -> str:
     return str(value) if value is not None else "N/A"
+
+
+def _fmt_quality_value(metric: str, value: Optional[float]) -> str:
+    """Choose the right formatter for a quality metric value."""
+    if metric == "piotroski_score":
+        return _fmt_score(value)
+    if metric in _PCT_QUALITY_METRICS:
+        return _fmt_pct(value)
+    return _fmt_ratio(value)   # ratios: current_ratio, quick_ratio, asset_turnover, etc.
 
 
 # =============================================================================
@@ -183,27 +217,38 @@ def _make_balance_table(balance: dict, years: list) -> "Table":
 
 
 def _make_quality_table(quality: dict, years: list) -> "Table":
-    """Build the Financial Quality Platypus Table."""
+    """
+    Build the Financial Quality Platypus Table dynamically.
+
+    Iterates over all metric dicts in quality_metrics (skipping non-tabular keys
+    such as risk_flags). Display order follows _QUALITY_DISPLAY_ORDER; any metric
+    not listed there is appended after the preferred set. The Piotroski F-Score row
+    is always rendered last and is highlighted by bold_last=True.
+
+    Formatters are chosen per metric:
+        _PCT_QUALITY_METRICS  -> _fmt_pct  (decimal ratio shown as %)
+        piotroski_score       -> _fmt_score (integer)
+        everything else       -> _fmt_ratio (plain decimal)
+    """
     header = ["Metric"] + [str(yr) for yr in years]
     data   = [header]
 
-    for metric in _QUALITY_MARGIN_METRICS:
-        entry = quality.get(metric, {})
+    # Build ordered key list: preferred order (if present) then unknown extras
+    extra_keys = [
+        k for k in quality
+        if k not in _NON_METRIC_KEYS
+        and k not in _QUALITY_DISPLAY_ORDER
+        and isinstance(quality[k], dict)
+    ]
+    display_keys = [k for k in _QUALITY_DISPLAY_ORDER if k in quality] + extra_keys
+
+    for metric in display_keys:
+        entry = quality[metric]
+        if not isinstance(entry, dict):
+            continue
         vals  = entry.get("values", {})
-        label = _METRIC_LABELS.get(metric, metric)
-        data.append([label] + [_fmt_pct(vals.get(yr)) for yr in years])
-
-    cr_entry = quality.get("current_ratio", {})
-    cr_vals  = cr_entry.get("values", {})
-    data.append(
-        [_METRIC_LABELS["current_ratio"]] + [_fmt_ratio(cr_vals.get(yr)) for yr in years]
-    )
-
-    pio_entry = quality.get("piotroski_score", {})
-    pio_vals  = pio_entry.get("values", {})
-    data.append(
-        [_METRIC_LABELS["piotroski_score"]] + [_fmt_score(pio_vals.get(yr)) for yr in years]
-    )
+        label = _METRIC_LABELS.get(metric, metric.replace("_", " ").title())
+        data.append([label] + [_fmt_quality_value(metric, vals.get(yr)) for yr in years])
 
     return Table(
         data,
@@ -334,7 +379,14 @@ def generate_pdf(summary: dict, narrative: str, output_path: str) -> None:
 
     # ── 2. Executive Overview ─────────────────────────────────────────────────
     story.append(Paragraph("Executive Overview", section_style))
-    story.append(Paragraph(narrative, narrative_style))
+    # Split narrative on newlines so LLM bullet points render as individual
+    # paragraphs. Suppress a leading "Executive Overview" header line if the
+    # LLM echoed it (the section heading is already added above).
+    narrative_lines = [ln.strip() for ln in narrative.splitlines() if ln.strip()]
+    if narrative_lines and narrative_lines[0].lower() == "executive overview":
+        narrative_lines = narrative_lines[1:]
+    for line in narrative_lines:
+        story.append(Paragraph(line, narrative_style))
 
     # ── 3. Income Statement ───────────────────────────────────────────────────
     story.append(Paragraph("Income Statement", section_style))

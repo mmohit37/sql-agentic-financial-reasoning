@@ -30,10 +30,16 @@ _BALANCE_METRICS = ["total_assets", "total_liabilities", "total_equity"]
 
 # Each derived metric: name -> (numerator canonical metric, denominator canonical metric)
 _DERIVED_METRIC_SPECS: dict[str, tuple[str, str]] = {
-    "gross_margin":     ("gross_profit",     "revenue"),
-    "operating_margin": ("operating_income", "revenue"),
-    "net_margin":       ("net_income",       "revenue"),
-    "current_ratio":    ("current_assets",   "current_liabilities"),
+    "gross_margin":     ("gross_profit",      "revenue"),
+    "operating_margin": ("operating_income",  "revenue"),
+    "net_margin":       ("net_income",        "revenue"),
+    "current_ratio":    ("current_assets",    "current_liabilities"),
+    # Extended derived metrics (Phase B)
+    "asset_turnover":   ("revenue",           "total_assets"),
+    "return_on_assets": ("net_income",        "total_assets"),
+    "return_on_equity": ("net_income",        "total_equity"),
+    "debt_ratio":       ("total_liabilities", "total_assets"),
+    "quick_ratio":      ("current_assets",    "current_liabilities"),
 }
 
 _METRIC_LABELS: dict[str, str] = {
@@ -48,6 +54,12 @@ _METRIC_LABELS: dict[str, str] = {
     "net_margin":        "Net Margin",
     "current_ratio":     "Current Ratio",
     "piotroski_score":   "Piotroski Score",
+    # Extended metrics (Phase B)
+    "asset_turnover":    "Asset Turnover",
+    "return_on_assets":  "Return on Assets",
+    "return_on_equity":  "Return on Equity",
+    "debt_ratio":        "Debt Ratio",
+    "quick_ratio":       "Quick Ratio",
 }
 
 # Renderer column widths
@@ -188,6 +200,37 @@ def build_financial_summary(company: str, years: list[int]) -> dict:
         if quality_metrics["net_margin"]["values"].get(yr) is None:
             if net_inc is not None and rev:
                 quality_metrics["net_margin"]["values"][yr] = net_inc / rev
+
+        # Read equity after potential derivation in step 3
+        equity = balance_sheet["total_equity"]["values"].get(yr)
+
+        # 5) Asset Turnover: revenue / total_assets
+        if quality_metrics["asset_turnover"]["values"].get(yr) is None:
+            if rev is not None and assets:
+                quality_metrics["asset_turnover"]["values"][yr] = rev / assets
+
+        # 6) Return on Assets (ROA): net_income / total_assets
+        if quality_metrics["return_on_assets"]["values"].get(yr) is None:
+            if net_inc is not None and assets:
+                quality_metrics["return_on_assets"]["values"][yr] = net_inc / assets
+
+        # 7) Return on Equity (ROE): net_income / total_equity
+        if quality_metrics["return_on_equity"]["values"].get(yr) is None:
+            if net_inc is not None and equity:
+                quality_metrics["return_on_equity"]["values"][yr] = net_inc / equity
+
+        # 8) Debt Ratio: total_liabilities / total_assets
+        if quality_metrics["debt_ratio"]["values"].get(yr) is None:
+            if liabs is not None and assets:
+                quality_metrics["debt_ratio"]["values"][yr] = liabs / assets
+
+        # 9) Quick Ratio (placeholder: same denominator as current_ratio until
+        #    inventory tracking is added — current_assets / current_liabilities)
+        if quality_metrics["quick_ratio"]["values"].get(yr) is None:
+            cur_a = get_canonical_financial_fact("current_assets", yr, company)
+            cur_l = get_canonical_financial_fact("current_liabilities", yr, company)
+            if cur_a is not None and cur_l:
+                quality_metrics["quick_ratio"]["values"][yr] = cur_a / cur_l
 
     return {
         "company":           company,
