@@ -5,12 +5,14 @@ When new entries are added to XBRL_METRIC_MAP, this module promotes
 matching raw facts into financial_facts without re-downloading filings.
 
 Only promotes consolidated, non-nil numeric facts.
-Uses the same deduplication strategy as canonical ingestion:
-one value per (company, year, metric), keeping the largest absolute value.
+Uses duration-aware canonical selection:
+- Duration metrics: longest period wins; latest end_date breaks ties.
+- Instant metrics: latest end_date wins; largest absolute value breaks ties.
 """
 
 import sqlite3
 import os
+from datetime import date
 
 from ace_research.xbrl.mappings import XBRL_METRIC_MAP
 from ace_research.db import DB_PATH
@@ -24,6 +26,47 @@ INSTANT_METRICS = {
     "long_term_debt",
     "shares_outstanding",
 }
+
+
+# =============================================================================
+# Selection logic
+# =============================================================================
+
+def _select_best(rows: list[dict], metric: str) -> float:
+    """
+    Choose the canonical value from a list of candidate rows.
+
+    Each row is: {"value": float, "start_date": str|None, "end_date": str|None}
+
+    Instant metrics  → latest end_date; largest absolute value breaks ties.
+    Duration metrics → longest (end - start) duration; latest end_date breaks
+                       ties.  Falls back to latest end_date / largest abs when
+                       no row has both dates.
+    """
+    def _parse(s: str | None) -> date | None:
+        try:
+            return date.fromisoformat(s) if s else None
+        except ValueError:
+            return None
+
+    if metric in INSTANT_METRICS:
+        return max(rows, key=lambda r: (r["end_date"] or "", abs(r["value"])))["value"]
+
+    # Duration metric — prefer longest period
+    dated = []
+    for r in rows:
+        sd = _parse(r["start_date"])
+        ed = _parse(r["end_date"])
+        if sd is not None and ed is not None:
+            dated.append((r, (ed - sd).days, ed))
+
+    if dated:
+        best = max(dated, key=lambda t: (t[1], t[2]))
+        return best[0]["value"]
+
+    # Fallback: no valid date pairs
+    return max(rows, key=lambda r: (r["end_date"] or "", abs(r["value"])))["value"]
+
 
 def backfill_canonical_from_raw(companies: list[str] | None = None, dry_run: bool = False):
     """
@@ -53,7 +96,8 @@ def backfill_canonical_from_raw(companies: list[str] | None = None, dry_run: boo
     placeholders = ",".join("?" * len(concept_names))
 
     query = f"""
-        SELECT company, fiscal_year, concept_local_name, numeric_value, period_type
+        SELECT company, fiscal_year, concept_local_name, numeric_value, period_type,
+               start_date, end_date, dimensions
         FROM raw_xbrl_facts
         WHERE is_consolidated = 1
           AND period_type IN ('duration', 'instant')
@@ -80,6 +124,11 @@ def backfill_canonical_from_raw(companies: list[str] | None = None, dry_run: boo
         if metric is None:
             continue
 
+        # Defensive Python-layer dimension filter (second line of defence after SQL)
+        dimensions = row["dimensions"]
+        if dimensions not in (None, "", "{}", {}):
+            continue
+
         if metric in INSTANT_METRICS and period_type != "instant":
             continue
         if metric not in INSTANT_METRICS and period_type != "duration":
@@ -98,15 +147,16 @@ def backfill_canonical_from_raw(companies: list[str] | None = None, dry_run: boo
         if key in existing:
             continue
 
-        if key not in candidates:
-            candidates[key] = value
-        else:
-            candidates[key] = max(candidates[key], value, key=lambda v: abs(v))
+        candidates.setdefault(key, []).append({
+            "value": value,
+            "start_date": row["start_date"],
+            "end_date": row["end_date"],
+        })
 
     # Insert candidates
     promoted = 0
     for (company, year, metric) in sorted(candidates.keys()):
-        value = candidates[(company, year, metric)]
+        value = _select_best(candidates[(company, year, metric)], metric)
         if dry_run:
             print(f"  [DRY RUN] Would insert: {company} | {year} | {metric} | {value}")
         else:
