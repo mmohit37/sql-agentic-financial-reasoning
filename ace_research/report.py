@@ -224,13 +224,15 @@ def build_financial_summary(company: str, years: list[int]) -> dict:
             if liabs is not None and assets:
                 quality_metrics["debt_ratio"]["values"][yr] = liabs / assets
 
-        # 9) Quick Ratio (placeholder: same denominator as current_ratio until
-        #    inventory tracking is added — current_assets / current_liabilities)
+        # 9) Quick Ratio: (current_assets - inventory) / current_liabilities
+        #    Falls back to current_assets / current_liabilities when inventory absent.
         if quality_metrics["quick_ratio"]["values"].get(yr) is None:
             cur_a = get_canonical_financial_fact("current_assets", yr, company)
             cur_l = get_canonical_financial_fact("current_liabilities", yr, company)
             if cur_a is not None and cur_l:
-                quality_metrics["quick_ratio"]["values"][yr] = cur_a / cur_l
+                inv = get_canonical_financial_fact("inventory", yr, company)
+                liquid_assets = cur_a - inv if inv is not None else cur_a
+                quality_metrics["quick_ratio"]["values"][yr] = liquid_assets / cur_l
 
     return {
         "company":           company,

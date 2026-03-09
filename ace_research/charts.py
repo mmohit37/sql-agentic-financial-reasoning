@@ -111,13 +111,17 @@ def _plot_trend(
                 _fmt_annotation(y, as_pct),
                 (x, y),
                 textcoords="offset points",
-                xytext=(0, 8),
+                xytext=(0, 12),
                 ha="center",
                 fontsize=6.5,
                 color=_ANNOT_COLOR,
             )
 
-    ax.set_title(title, fontsize=9, fontweight="bold", color=_LINE_COLOR, pad=6)
+        max_val = max(ys)
+        min_val = min(ys)
+        ax.set_ylim(min_val * 0.95, max_val * 1.10)
+
+    ax.set_title(title, fontsize=9, fontweight="bold", color=_LINE_COLOR, pad=12)
     ax.set_ylabel(y_label, fontsize=7.5, color="#555555")
     ax.set_xlabel("Year", fontsize=7.5, color="#555555")
 
@@ -131,7 +135,7 @@ def _plot_trend(
     for spine in ax.spines.values():
         spine.set_edgecolor(_GRID_COLOR)
 
-    plt.tight_layout(pad=0.8)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
 
     fd, path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
