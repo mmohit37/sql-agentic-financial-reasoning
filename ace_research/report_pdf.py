@@ -430,6 +430,15 @@ def generate_pdf(summary: dict, narrative: str, output_path: str) -> None:
     except Exception:
         pass  # charts are optional; report continues without them
 
+    # ── 2c. Trend Signals ─────────────────────────────────────────────────────
+    trend_signals = summary.get("trend_signals", {}).get("signals", [])
+    if trend_signals:
+        story.append(Paragraph("Trend Signals", section_style))
+        story.append(Spacer(1, 0.05 * inch))
+        for signal in trend_signals:
+            story.append(Paragraph(f"\u2022 {signal}", narrative_style))
+        story.append(Spacer(1, 0.1 * inch))
+
     # ── 3. Income Statement ───────────────────────────────────────────────────
     story.append(Paragraph("Income Statement", section_style))
     story.append(_make_income_table(income, years))

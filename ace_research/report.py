@@ -234,13 +234,18 @@ def build_financial_summary(company: str, years: list[int]) -> dict:
                 liquid_assets = cur_a - inv if inv is not None else cur_a
                 quality_metrics["quick_ratio"]["values"][yr] = liquid_assets / cur_l
 
-    return {
+    summary = {
         "company":           company,
         "years":             years,
         "income_statement":  income_statement,
         "balance_sheet":     balance_sheet,
         "quality_metrics":   quality_metrics,
     }
+
+    from ace_research.trend_engine import analyze_trends
+    summary["trend_signals"] = analyze_trends(summary, years)
+
+    return summary
 
 
 # =============================================================================
