@@ -23,7 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from ace_research.db import get_canonical_financial_fact
+from ace_research.db import get_canonical_financial_fact, has_raw_xbrl_facts
 from ace_research.xbrl.ingest import ingest_local_xbrl_file
 from ace_research.xbrl.backfill import backfill_canonical_from_raw
 from ace_research.sec.fetch import download_10k, COMPANY_TO_TICKER
@@ -79,14 +79,20 @@ def ensure_company_years_ready(company: str, years: list[int]) -> None:
         - May insert rows into financial_facts and raw_xbrl_facts
     """
     for year in years:
-        # Step 1: canonical coverage check
+        # Step 1: canonical coverage check (fast path — data fully ready)
         if get_canonical_financial_fact("revenue", year, company) is not None:
-            continue  # already present
+            continue
 
-        # Step 2: look for an existing local filing
+        # Step 2: raw_xbrl_facts check — if rows exist, ingestion already ran;
+        # only the canonical backfill is needed (skip download + re-ingest).
+        if has_raw_xbrl_facts(company, year):
+            backfill_canonical_from_raw([company])
+            continue
+
+        # Step 3: look for an existing local filing
         file_path = _find_local_filing(company, year)
 
-        # Step 3: download if not found locally
+        # Step 4: download from SEC EDGAR if no local file found
         if file_path is None:
             if company not in COMPANY_TO_TICKER:
                 continue  # unknown company — cannot auto-fetch
@@ -94,6 +100,6 @@ def ensure_company_years_ready(company: str, years: list[int]) -> None:
             if file_path is None:
                 continue  # no matching 10-K on SEC EDGAR
 
-        # Steps 4 & 5: ingest then backfill canonical
+        # Steps 5 & 6: ingest XBRL facts then promote to canonical
         ingest_local_xbrl_file(file_path=file_path, company=company)
         backfill_canonical_from_raw([company])

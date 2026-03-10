@@ -17,11 +17,13 @@ from ace_research.orchestration import ensure_company_years_ready
 # Helpers
 # =============================================================================
 
-def _patch_all(revenue=None, local_file=None, downloaded=None):
+def _patch_all(revenue=None, local_file=None, downloaded=None, has_raw=False):
     """Return a context-manager stack that patches every external call."""
     return (
         patch("ace_research.orchestration.get_canonical_financial_fact",
               return_value=revenue),
+        patch("ace_research.orchestration.has_raw_xbrl_facts",
+              return_value=has_raw),
         patch("ace_research.orchestration._find_local_filing",
               return_value=local_file),
         patch("ace_research.orchestration.download_10k",
@@ -29,6 +31,8 @@ def _patch_all(revenue=None, local_file=None, downloaded=None):
         patch("ace_research.orchestration.ingest_local_xbrl_file"),
         patch("ace_research.orchestration.backfill_canonical_from_raw"),
     )
+
+_NO_RAW = patch("ace_research.orchestration.has_raw_xbrl_facts", return_value=False)
 
 
 # =============================================================================
@@ -70,6 +74,7 @@ class TestUsesLocalFileWhenAvailable:
     def test_ingest_called_with_local_file(self):
         with patch("ace_research.orchestration.get_canonical_financial_fact",
                    return_value=None), \
+             _NO_RAW, \
              patch("ace_research.orchestration._find_local_filing",
                    return_value="/data/sec/goog-20221231.htm"), \
              patch("ace_research.orchestration.download_10k") as mock_dl, \
@@ -85,6 +90,7 @@ class TestUsesLocalFileWhenAvailable:
     def test_backfill_called_after_ingest(self):
         with patch("ace_research.orchestration.get_canonical_financial_fact",
                    return_value=None), \
+             _NO_RAW, \
              patch("ace_research.orchestration._find_local_filing",
                    return_value="/data/sec/goog-20221231.htm"), \
              patch("ace_research.orchestration.download_10k"), \
@@ -104,6 +110,7 @@ class TestDownloadsWhenNoLocalFile:
     def test_download_called_for_known_company(self):
         with patch("ace_research.orchestration.get_canonical_financial_fact",
                    return_value=None), \
+             _NO_RAW, \
              patch("ace_research.orchestration._find_local_filing", return_value=None), \
              patch("ace_research.orchestration.download_10k",
                    return_value="/data/sec/goog-2023-02-03.htm") as mock_dl, \
@@ -116,6 +123,7 @@ class TestDownloadsWhenNoLocalFile:
     def test_ingest_and_backfill_called_after_download(self):
         with patch("ace_research.orchestration.get_canonical_financial_fact",
                    return_value=None), \
+             _NO_RAW, \
              patch("ace_research.orchestration._find_local_filing", return_value=None), \
              patch("ace_research.orchestration.download_10k",
                    return_value="/data/sec/goog-2023-02-03.htm"), \
@@ -132,6 +140,7 @@ class TestDownloadsWhenNoLocalFile:
         """If SEC EDGAR has no matching filing, ingest must not be called."""
         with patch("ace_research.orchestration.get_canonical_financial_fact",
                    return_value=None), \
+             _NO_RAW, \
              patch("ace_research.orchestration._find_local_filing", return_value=None), \
              patch("ace_research.orchestration.download_10k", return_value=None), \
              patch("ace_research.orchestration.ingest_local_xbrl_file") as mock_ingest:
@@ -149,6 +158,7 @@ class TestUnknownCompany:
     def test_skips_unknown_company_silently(self):
         with patch("ace_research.orchestration.get_canonical_financial_fact",
                    return_value=None), \
+             _NO_RAW, \
              patch("ace_research.orchestration._find_local_filing", return_value=None), \
              patch("ace_research.orchestration.download_10k") as mock_dl, \
              patch("ace_research.orchestration.ingest_local_xbrl_file") as mock_ingest:
@@ -160,6 +170,7 @@ class TestUnknownCompany:
     def test_no_exception_for_unknown_company(self):
         with patch("ace_research.orchestration.get_canonical_financial_fact",
                    return_value=None), \
+             _NO_RAW, \
              patch("ace_research.orchestration._find_local_filing", return_value=None), \
              patch("ace_research.orchestration.download_10k"), \
              patch("ace_research.orchestration.ingest_local_xbrl_file"):
@@ -180,6 +191,7 @@ class TestMultipleYears:
 
         with patch("ace_research.orchestration.get_canonical_financial_fact",
                    side_effect=fake_gcf), \
+             _NO_RAW, \
              patch("ace_research.orchestration._find_local_filing",
                    return_value="/data/sec/msft-20230630.htm"), \
              patch("ace_research.orchestration.download_10k"), \
@@ -192,6 +204,20 @@ class TestMultipleYears:
             file_path="/data/sec/msft-20230630.htm", company="Microsoft"
         )
         mock_bf.assert_called_once_with(["Microsoft"])
+
+    def test_raw_xbrl_shortcut_skips_ingest(self):
+        """raw_xbrl_facts present but no canonical → backfill-only path."""
+        with patch("ace_research.orchestration.get_canonical_financial_fact",
+                   return_value=None), \
+             patch("ace_research.orchestration.has_raw_xbrl_facts", return_value=True), \
+             patch("ace_research.orchestration.download_10k") as mock_dl, \
+             patch("ace_research.orchestration.ingest_local_xbrl_file") as mock_ingest, \
+             patch("ace_research.orchestration.backfill_canonical_from_raw") as mock_bf:
+            ensure_company_years_ready("Google", [2022])
+
+        mock_dl.assert_not_called()
+        mock_ingest.assert_not_called()
+        mock_bf.assert_called_once_with(["Google"])
 
     def test_empty_years_list_does_nothing(self):
         with patch("ace_research.orchestration.get_canonical_financial_fact") as mock_gcf, \

@@ -229,6 +229,23 @@ def insert_raw_xbrl_fact(
     conn.close()
 
 # ----------------------------
+# Raw XBRL helpers
+# ----------------------------
+
+def has_raw_xbrl_facts(company: str, year: int) -> bool:
+    """Return True if raw_xbrl_facts contains at least one row for company/year."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM raw_xbrl_facts WHERE company = ? AND fiscal_year = ? LIMIT 1",
+        (company, year),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
+# ----------------------------
 # Year-over-Year Helpers (Reuse Existing Functions)
 # ----------------------------
 

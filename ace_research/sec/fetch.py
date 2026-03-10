@@ -28,11 +28,21 @@ import requests
 COMPANY_TO_TICKER: dict[str, str] = {
     "Microsoft": "msft",
     "Google":    "goog",
+    "Apple":     "aapl",
+    "Nvidia":    "nvda",
+    "Amazon":    "amzn",
+    "Meta":      "meta",
+    "Tesla":     "tsla",
 }
 
 COMPANY_TO_CIK: dict[str, str] = {
     "Microsoft": "0000789019",
     "Google":    "0001652044",
+    "Apple":     "0000320193",
+    "Nvidia":    "0001045810",
+    "Amazon":    "0001018724",
+    "Meta":      "0001326801",
+    "Tesla":     "0001318605",
 }
 
 
